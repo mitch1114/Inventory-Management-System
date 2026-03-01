@@ -1,7 +1,8 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { LOCKING } from "./lib/constants";
 import { computeInventory } from "./lib/inventory";
-import { loadData, saveData } from "./lib/storage";
+import { loadData, saveData, subscribeToChanges } from "./lib/storage";
+import { isSupabaseConfigured } from "./lib/supabase";
 import Dashboard from "./components/Dashboard";
 import PipelineView from "./components/PipelineView";
 import SalesOrders from "./components/SalesOrders";
@@ -26,12 +27,48 @@ const TABS = [
 ];
 
 export default function App() {
-  const [dataRaw, setDataRaw] = useState(() => loadData());
+  const [dataRaw, setDataRaw] = useState(defaultData);
   const [tab, setTab] = useState("dashboard");
+  const [loading, setLoading] = useState(true);
+  const [syncStatus, setSyncStatus] = useState("idle"); // "idle" | "connected" | "updated"
+  const ignoreNextRemote = useRef(false);
+
+  // Load data on mount (async -- Supabase fetch, localStorage fallback)
+  useEffect(() => {
+    let cancelled = false;
+    loadData().then((loaded) => {
+      if (!cancelled) {
+        setDataRaw(loaded);
+        setLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Subscribe to real-time changes from other users
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    setSyncStatus("connected");
+
+    const unsubscribe = subscribeToChanges((remoteData) => {
+      // Skip if this was our own save that triggered the subscription
+      if (ignoreNextRemote.current) {
+        ignoreNextRemote.current = false;
+        return;
+      }
+      setDataRaw(remoteData);
+      setSyncStatus("updated");
+      // Reset the "updated" indicator after 3 seconds
+      setTimeout(() => setSyncStatus("connected"), 3000);
+    });
+
+    return unsubscribe;
+  }, []);
 
   const setData = useCallback((updater) => {
     setDataRaw((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
+      ignoreNextRemote.current = true;
       saveData(next);
       return next;
     });
@@ -47,6 +84,44 @@ export default function App() {
 
   const pipelineCount = data.salesOrders.filter((o) => LOCKING.has(o.fulfillmentStage)).length;
   const alertCount = data.products.filter((p) => p.available <= p.reorderPoint).length;
+
+  // Loading screen
+  if (loading) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: "100vh",
+          background: "#F1F5F9",
+          fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+        }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontWeight: 900, fontSize: 20, color: "#0F172A", marginBottom: 8 }}>
+            ACC Crappie Stix
+          </div>
+          <div style={{ fontSize: 13, color: "#94A3B8" }}>Loading inventory data...</div>
+        </div>
+      </div>
+    );
+  }
+
+  const syncLabel =
+    syncStatus === "connected"
+      ? "Synced"
+      : syncStatus === "updated"
+        ? "Updated just now"
+        : isSupabaseConfigured()
+          ? "Connecting..."
+          : "Local only";
+  const syncColor =
+    syncStatus === "connected"
+      ? "#16A34A"
+      : syncStatus === "updated"
+        ? "#2563EB"
+        : "#94A3B8";
 
   return (
     <div
@@ -149,16 +224,35 @@ export default function App() {
           })}
         </nav>
         <div style={{ padding: "14px 16px", borderTop: "1px solid #E2E8F0" }}>
+          {/* Sync status */}
           <div
             style={{
-              fontSize: 10,
-              color: "#94A3B8",
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              marginBottom: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginBottom: 8,
             }}
           >
-            Auto-saved locally
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: syncColor,
+                flexShrink: 0,
+              }}
+            />
+            <span
+              style={{
+                fontSize: 10,
+                color: syncColor,
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                fontWeight: 700,
+              }}
+            >
+              {syncLabel}
+            </span>
           </div>
           <button
             onClick={() => {
