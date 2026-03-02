@@ -20,6 +20,27 @@ export default function Dashboard({ data }) {
   const totalLocked = computedProds.reduce((s, p) => s + p.locked * p.costPrice, 0);
   const totalAvail = computedProds.reduce((s, p) => s + p.available * p.costPrice, 0);
   const totalBO = computedProds.reduce((s, p) => s + p.backordered, 0);
+
+  // Fill rate & revenue lost -- across all active (locking) orders
+  const fillStats = useMemo(() => {
+    let totalOrdered = 0;
+    let totalFilled = 0;
+    let revenueLost = 0;
+    const prodMap = Object.fromEntries(data.products.map((p) => [p.id, p]));
+    salesOrders.forEach((o) => {
+      if (!LOCKING.has(o.fulfillmentStage)) return;
+      o.lines.forEach((l) => {
+        totalOrdered += l.qty;
+        totalFilled += l.qtyFilled != null ? l.qtyFilled : l.qty;
+        const bo = l.qtyBackordered != null ? l.qtyBackordered : 0;
+        if (bo > 0) {
+          revenueLost += bo * l.price;
+        }
+      });
+    });
+    const fillRate = totalOrdered > 0 ? (totalFilled / totalOrdered) * 100 : 100;
+    return { fillRate, revenueLost, totalOrdered, totalFilled };
+  }, [salesOrders, data.products]);
   const revenue = salesOrders
     .filter((o) => o.fulfillmentStage === "shipped")
     .reduce(
@@ -89,6 +110,20 @@ export default function Dashboard({ data }) {
         <Stat label="Available to Sell" value={fmt(totalAvail)} sub="at cost" accent="#10B981" />
         <Stat label="Locked in Pipeline" value={fmt(totalLocked)} sub="confirmed->booked" accent="#EAB308" warn />
         <Stat label="Backordered Units" value={fmtNum(totalBO)} accent="#F97316" warn={totalBO > 0} />
+        <Stat
+          label="Fill Rate"
+          value={`${fillStats.fillRate.toFixed(1)}%`}
+          sub={`${fmtNum(fillStats.totalFilled)} of ${fmtNum(fillStats.totalOrdered)} units`}
+          accent={fillStats.fillRate >= 95 ? "#10B981" : fillStats.fillRate >= 80 ? "#EAB308" : "#EF4444"}
+          warn={fillStats.fillRate < 95}
+        />
+        <Stat
+          label="Revenue at Risk"
+          value={fmt(fillStats.revenueLost)}
+          sub="unfilled backorders"
+          accent="#EF4444"
+          warn={fillStats.revenueLost > 0}
+        />
         <Stat
           label="Active in Pipeline"
           value={pipeline.confirmed + (pipeline.picked || 0) + (pipeline.booked || 0)}
