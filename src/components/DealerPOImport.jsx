@@ -358,21 +358,52 @@ export default function DealerPOImport({ data, setData, onClose }) {
       ? `Imported PO ${dealerInfo.poRef || "?"} from ${dealerInfo.customer} -- ${validLines.length} lines * ${fmtNum(totalUnits)} units * ${fmt(totalCost)} ${parsedMeta.fileType} cost${parsedMeta.buyerName ? " * Buyer: " + parsedMeta.buyerName : ""}`
       : `Imported ${dealerInfo.poRef || "dealer PO"} from ${dealerInfo.customer} -- ${fmtNum(totalUnits)} units`;
 
-    setData((d) => ({
-      ...d,
-      salesOrders: [...d.salesOrders, order],
-      counters: { ...d.counters, so: num },
-      auditLog: [
-        ...(d.auditLog || []),
-        {
+    setData((d) => {
+      const customerName = (dealerInfo.customer || "Unknown Dealer").trim();
+      const existing = (d.customers || []).find(
+        (c) => c.name.toLowerCase().trim() === customerName.toLowerCase(),
+      );
+
+      // Auto-create customer if not in the database
+      let customers = d.customers || [];
+      const newCustLogs = [];
+      if (!existing && customerName && customerName !== "Unknown Dealer") {
+        const newCust = {
+          id: uid(),
+          name: customerName,
+          type: parsedMeta ? parsedMeta.fileType : "dealer",
+          email: parsedMeta && parsedMeta.buyerEmail ? parsedMeta.buyerEmail : "",
+          phone: "",
+          address: parsedMeta && parsedMeta.shipToAddr ? parsedMeta.shipToAddr : "",
+        };
+        customers = [...customers, newCust];
+        newCustLogs.push({
           id: uid(),
           ts: nowIso(),
-          type: "dealer-import",
-          entity: orderNum,
-          description: desc,
-        },
-      ],
-    }));
+          type: "adjustment",
+          entity: customerName,
+          description: `Auto-added customer "${customerName}" (${newCust.type}) from PO import`,
+        });
+      }
+
+      return {
+        ...d,
+        customers,
+        salesOrders: [...d.salesOrders, order],
+        counters: { ...d.counters, so: num },
+        auditLog: [
+          ...(d.auditLog || []),
+          {
+            id: uid(),
+            ts: nowIso(),
+            type: "dealer-import",
+            entity: orderNum,
+            description: desc,
+          },
+          ...newCustLogs,
+        ],
+      };
+    });
 
     setStep("done");
   };
