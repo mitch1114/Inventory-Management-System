@@ -166,8 +166,33 @@ export function parseAccOrderWriter(sheetData) {
 
 export function detectAccFormat(sheetData) {
   if (!sheetData || sheetData.length < 8) return false;
-  const row7 = sheetData[6]; // row 8 (0-indexed row 7)
-  if (!row7) return false;
-  const e8 = String(row7[4] || "").toUpperCase();
-  return e8.includes("DEALER PROGRAM") || e8.includes("DISTRIBUTOR PROGRAM");
+  // Primary: check E8 (0-indexed row 6, col 4) for program type
+  const row7 = sheetData[6];
+  if (row7) {
+    const e8 = String(row7[4] || "").toUpperCase();
+    if (e8.includes("DEALER PROGRAM") || e8.includes("DISTRIBUTOR PROGRAM")) return true;
+  }
+  // Secondary: look for ACC structural markers in the first 15 rows
+  // Check for "Customer Name:" label in column A and "PO#:" label
+  let hasCustomerLabel = false;
+  let hasPOLabel = false;
+  let hasProductCodeHeader = false;
+  for (let i = 0; i < Math.min(25, sheetData.length); i++) {
+    const row = sheetData[i];
+    if (!row) continue;
+    const a = String(row[0] || "").toUpperCase().trim();
+    if (a.includes("CUSTOMER NAME")) hasCustomerLabel = true;
+    if (a.includes("PO#") || a === "PO NUMBER") hasPOLabel = true;
+    // Check for the product code header row (the telltale sign)
+    if (a === "PRODUCT CODE" || a.includes("PRODUCT CODE")) {
+      const b = String(row[1] || "").toUpperCase().trim();
+      const d = String(row[3] || "").toUpperCase().trim();
+      if (b.includes("DESCRIPTION") && (d.includes("ORDER") || d.includes("QTY"))) {
+        hasProductCodeHeader = true;
+      }
+    }
+  }
+  // If we find the product table headers + at least one structural label, it's ACC
+  if (hasProductCodeHeader && (hasCustomerLabel || hasPOLabel)) return true;
+  return false;
 }

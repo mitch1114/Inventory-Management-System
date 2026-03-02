@@ -43,9 +43,20 @@ export const SC = {
 
 // --- CSV column aliases -------------------------------------------------------
 export const COL_ALIASES = {
-  sku:   ["sku", "item", "item #", "item no", "part", "part no", "part number", "product code", "code", "item code", "model", "model #", "style", "style #", "upc"],
-  qty:   ["qty", "quantity", "order qty", "ordered", "units", "qty ordered", "amount", "count"],
-  price: ["price", "unit price", "sell price", "each", "cost", "rate", "unit cost", "msrp", "dealer price", "wholesale", "net price"],
-  name:  ["name", "description", "product", "product name", "item description", "desc", "title"],
-  poRef: ["po", "po#", "po number", "po no", "purchase order", "reference", "ref", "order number", "order #", "dealer po"],
+  sku:   ["sku", "item", "item #", "item no", "item no.", "item number", "part", "part no", "part no.", "part number", "part #",
+          "product code", "code", "item code", "model", "model #", "model no", "style", "style #", "style no",
+          "upc", "upc#", "upc #", "barcode", "barcode no", "barcode no.", "stock code",
+          "article", "article no", "article no.", "article #", "catalog #", "catalog no", "catalog number",
+          "product #", "product no", "product no.", "cust_item", "cust item"],
+  qty:   ["qty", "quantity", "order qty", "order quantity", "ordered", "units", "qty ordered", "quantity ordered",
+          "amount", "count", "pcs", "pieces", "ship qty", "ship quantity", "total qty", "total quantity",
+          "qty ordered", "order qty."],
+  price: ["price", "unit price", "sell price", "each", "cost", "rate", "unit cost",
+          "msrp", "dealer price", "dealer cost", "distributor cost", "dist cost", "wholesale", "wholesale price",
+          "net price", "our price", "your price", "fob", "fob price"],
+  name:  ["name", "description", "product", "product name", "item description", "item name",
+          "desc", "title", "product description", "material", "material description", "commodity", "specification"],
+  poRef: ["po", "po#", "po #", "po number", "po no", "po no.", "purchase order", "reference", "ref",
+          "order number", "order #", "order no", "order no.", "dealer po", "customer po", "po reference",
+          "order ref", "order reference"],
 };

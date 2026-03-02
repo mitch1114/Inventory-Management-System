@@ -2,7 +2,7 @@ import { useState, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { LOCKING, COL_ALIASES } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
-import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol } from "../lib/utils";
+import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow } from "../lib/utils";
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
 import { Modal, Field, Badge, IS, SS, BP, BS, BG } from "./ui";
 
@@ -243,9 +243,17 @@ export default function DealerPOImport({ data, setData, onClose }) {
             return;
           }
 
-          // Generic XLSX -- treat as flat table (first row = headers)
-          const jsonRows = XLSX.utils.sheet_to_json(ws, { defval: "" });
-          if (jsonRows.length === 0) {
+          // Generic XLSX -- scan for header row (may not be row 1)
+          const hdrResult = findHeaderRow(sheetData, COL_ALIASES);
+          let jsonRows;
+          if (hdrResult && hdrResult.headerRowIdx > 0) {
+            // Header row found below row 1 -- re-parse using that row as header
+            jsonRows = XLSX.utils.sheet_to_json(ws, { defval: "", range: hdrResult.headerRowIdx });
+          } else {
+            // First row is the header (normal flat table)
+            jsonRows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+          }
+          if (!jsonRows || jsonRows.length === 0) {
             setError("Spreadsheet has no data rows.");
             return;
           }

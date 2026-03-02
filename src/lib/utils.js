@@ -65,5 +65,48 @@ export function parseCSV(text) {
     });
 }
 
-export const detectCol = (headers, aliases) =>
-  headers.find((h) => aliases.includes(h.toLowerCase().trim())) || null;
+// --- Header row detection for XLSX files with metadata rows ------------------
+// Scans the first maxRows rows of raw sheet data (array-of-arrays) for a row
+// that looks like a header row (contains at least a SKU-like + QTY-like column).
+// Returns { headerRowIdx, headers } or null if the first row is fine.
+export function findHeaderRow(sheetData, colAliases, maxRows = 30) {
+  const skuAliases = colAliases.sku;
+  const qtyAliases = colAliases.qty;
+  const matchesAny = (val, aliases) => {
+    const lv = String(val || "").toLowerCase().trim();
+    if (!lv) return false;
+    if (aliases.includes(lv)) return true;
+    if (aliases.some((a) => lv.includes(a))) return true;
+    if (lv.length >= 3 && aliases.some((a) => a.includes(lv))) return true;
+    return false;
+  };
+  for (let i = 0; i < Math.min(maxRows, sheetData.length); i++) {
+    const row = sheetData[i];
+    if (!row || !Array.isArray(row)) continue;
+    let hasSku = false;
+    let hasQty = false;
+    for (const cell of row) {
+      if (matchesAny(cell, skuAliases)) hasSku = true;
+      if (matchesAny(cell, qtyAliases)) hasQty = true;
+      if (hasSku && hasQty) return { headerRowIdx: i, headers: row.map((c) => String(c || "").trim()) };
+    }
+  }
+  return null;
+}
+
+export function detectCol(headers, aliases) {
+  // Pass 1: exact match (header == alias)
+  const exact = headers.find((h) => aliases.includes(h.toLowerCase().trim()));
+  if (exact) return exact;
+  // Pass 2: header contains an alias as substring (e.g. "Order Quantity" contains "quantity")
+  for (const h of headers) {
+    const lh = h.toLowerCase().trim();
+    if (aliases.some((a) => lh.includes(a))) return h;
+  }
+  // Pass 3: alias contains the header as substring (e.g. alias "order quantity" contains header "quantity")
+  for (const h of headers) {
+    const lh = h.toLowerCase().trim();
+    if (lh.length >= 3 && aliases.some((a) => a.includes(lh))) return h;
+  }
+  return null;
+}
