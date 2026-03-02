@@ -360,7 +360,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
   // RENDER
   // ===========================================================================
   return (
-    <Modal title="Import Dealer Purchase Order" onClose={onClose} width={820}>
+    <Modal title="Import New Dealer / Distributor PO" onClose={onClose} width={820}>
       <StepTab steps={activeSteps} current={step} />
 
       {error && (

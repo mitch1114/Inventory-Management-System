@@ -842,7 +842,7 @@ export default function SalesOrders({ data, setData }) {
             Export CSV
           </button>
           <button style={BAq} onClick={() => setShowImport(true)}>
-            Import Dealer PO
+            Import New Dealer / Distributor PO
           </button>
           <button style={{ ...BS, fontSize: 12 }} onClick={openPreorder}>
             + Pre-Order
