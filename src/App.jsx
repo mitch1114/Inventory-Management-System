@@ -19,7 +19,7 @@ const TABS = [
   { key: "pipeline", label: "Pipeline", icon: "\u25A0", hasPipelineBadge: true },
   { key: "sales", label: "Orders", icon: "\u2630" },
   { key: "products", label: "Inventory", icon: "\u25A3", hasAlertBadge: true },
-  { key: "po", label: "Purchase POs", icon: "\u2191" },
+  { key: "po", label: "Supplier POs", icon: "\u2191" },
   { key: "suppliers", label: "Suppliers", icon: "\u2692" },
   { key: "customers", label: "Customers", icon: "\u2B50" },
   { key: "reports", label: "Reports", icon: "\u2261" },

@@ -60,6 +60,9 @@ export const defaultData = {
   suppliers: [
     { id: "s1", name: "Far East Rods Co.", contact: "David Lin", email: "david@ferods.com", phone: "555-8801", leadDays: 45 },
     { id: "s2", name: "Tackle Components Inc.", contact: "Mike Russo", email: "mike@tackleci.com", phone: "555-8802", leadDays: 21 },
+    { id: "s3", name: "Pokee Fishing Tackle Co., Ltd.", contact: "", email: "", phone: "", leadDays: 60 },
+    { id: "s4", name: "Fishing Capital Company Limited", contact: "", email: "", phone: "", leadDays: 45 },
+    { id: "s5", name: "Tech Angler Company Limited", contact: "", email: "", phone: "", leadDays: 45 },
   ],
   salesOrders: [
     {

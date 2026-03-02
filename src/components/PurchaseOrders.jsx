@@ -2,7 +2,8 @@ import { useState, useMemo } from "react";
 import { LOCKING } from "../lib/constants";
 import { autoAllocate } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso } from "../lib/utils";
-import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BG } from "./ui";
+import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BG, BAq } from "./ui";
+import SupplierPOImport from "./SupplierPOImport";
 
 // --- Helpers -----------------------------------------------------------------
 const blank = () => ({
@@ -22,6 +23,7 @@ export default function PurchaseOrders({ data, setData }) {
   const [form, setForm] = useState(blank());
   const [allocResult, setAllocResult] = useState(null);
   const [search, setSearch] = useState("");
+  const [showImport, setShowImport] = useState(false);
 
   // Derived lookups
   const prodMap = useMemo(
@@ -201,10 +203,10 @@ export default function PurchaseOrders({ data, setData }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <div>
           <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: 0 }}>
-            Purchase Orders
+            Supplier POs
           </h2>
           <p style={{ color: "#64748B", margin: "4px 0 0", fontSize: 13 }}>
-            {data.purchaseOrders.length} purchase order{data.purchaseOrders.length !== 1 ? "s" : ""}
+            {data.purchaseOrders.length} supplier PO{data.purchaseOrders.length !== 1 ? "s" : ""}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -214,6 +216,9 @@ export default function PurchaseOrders({ data, setData }) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          <button style={BAq} onClick={() => setShowImport(true)}>
+            Import Supplier PO
+          </button>
           <button style={BP} onClick={openNew}>
             + New PO
           </button>
@@ -459,6 +464,15 @@ export default function PurchaseOrders({ data, setData }) {
             </button>
           </div>
         </Modal>
+      )}
+
+      {/* Supplier PO Import */}
+      {showImport && (
+        <SupplierPOImport
+          data={data}
+          setData={setData}
+          onClose={() => setShowImport(false)}
+        />
       )}
     </div>
   );
