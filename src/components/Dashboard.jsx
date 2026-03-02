@@ -107,13 +107,17 @@ export default function Dashboard({ data }) {
           marginBottom: 16,
         }}
       >
-        <div style={{ fontWeight: 700, color: "#334155", marginBottom: 12, fontSize: 13 }}>
-          Pipeline Status
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: "#334155", fontSize: 13 }}>
+            Pipeline Status
+          </div>
+          <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600 }}>Last 7 Days</div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
           {STAGES.map((s) => {
             const col = { confirmed: "#3B82F6", picked: "#EAB308", booked: "#06B6D4", shipped: "#10B981" }[s];
-            const orders = salesOrders.filter((o) => o.fulfillmentStage === s);
+            const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+            const orders = salesOrders.filter((o) => o.fulfillmentStage === s && o.date >= cutoff);
             const units = orders.reduce(
               (sum, o) =>
                 sum + o.lines.reduce((ls, l) => ls + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0),
