@@ -7,9 +7,14 @@ import { Badge, Modal, Field, IS, BP, BS } from "./ui";
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
   const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso() });
+  const [pickQtys, setPickQtys] = useState([]); // [{productId, qtyFilled}] for pick confirmation
   const computedProds = useMemo(
     () => computeInventory(data.products, data.salesOrders),
     [data.products, data.salesOrders],
+  );
+  const prodMap = useMemo(
+    () => Object.fromEntries(data.products.map((p) => [p.id, p])),
+    [data.products],
   );
   const stageOrders = useMemo(() => {
     const m = {};
@@ -23,13 +28,38 @@ export default function PipelineView({ data, setData }) {
   }, [data.salesOrders]);
   const SCOL = { confirmed: "#3B82F6", picked: "#EAB308", booked: "#06B6D4", shipped: "#10B981" };
 
+  // Open the advance modal -- initialize pickQtys for confirmed->picked transition
+  const openAdvance = (o) => {
+    setAdvModal(o);
+    setShipForm({
+      carrier: (o.shipment && o.shipment.carrier) || "",
+      trackingNum: (o.shipment && o.shipment.trackingNum) || "",
+      shipDate: todayIso(),
+    });
+    // Pre-fill pick quantities with current qtyFilled values
+    setPickQtys(
+      o.lines.map((l) => ({
+        productId: l.productId,
+        qtyFilled: l.qtyFilled != null ? l.qtyFilled : l.qty,
+      })),
+    );
+  };
+
   const doAdvance = () => {
     const o = advModal;
     const next = STAGE_NEXT[o.fulfillmentStage];
     if (!next) return;
-    setData((d) => advanceStage(d, o.id, next, next === "shipped" ? shipForm : null));
+    // Pass adjusted lines when moving to "picked" (confirmed -> picked)
+    const adjusted = next === "picked" ? pickQtys : null;
+    setData((d) => advanceStage(d, o.id, next, next === "shipped" ? shipForm : null, adjusted));
     setAdvModal(null);
   };
+
+  // Pick modal stats
+  const pickTotalOrdered = advModal ? advModal.lines.reduce((s, l) => s + l.qty, 0) : 0;
+  const pickTotalFilled = pickQtys.reduce((s, l) => s + l.qtyFilled, 0);
+  const pickTotalBO = pickTotalOrdered - pickTotalFilled;
+  const pickFillRate = pickTotalOrdered > 0 ? (pickTotalFilled / pickTotalOrdered) * 100 : 100;
 
   return (
     <div>
@@ -262,16 +292,28 @@ export default function PipelineView({ data, setData }) {
                           {o.shipment.carrier} {o.shipment.trackingNum}
                         </div>
                       )}
+
+                      {/* Callout on Confirmed cards to verify quantities at pick */}
+                      {stage === "confirmed" && next && (
+                        <div
+                          style={{
+                            background: "#FFF7ED",
+                            border: "1px solid #FED7AA",
+                            borderRadius: 6,
+                            padding: "4px 8px",
+                            marginBottom: 6,
+                            fontSize: 10,
+                            color: "#9A3412",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Verify actual pick quantities at next step
+                        </div>
+                      )}
+
                       {next && (
                         <button
-                          onClick={() => {
-                            setAdvModal(o);
-                            setShipForm({
-                              carrier: (o.shipment && o.shipment.carrier) || "",
-                              trackingNum: (o.shipment && o.shipment.trackingNum) || "",
-                              shipDate: todayIso(),
-                            });
-                          }}
+                          onClick={() => openAdvance(o)}
                           style={{
                             width: "100%",
                             padding: "6px",
@@ -298,7 +340,11 @@ export default function PipelineView({ data, setData }) {
       </div>
 
       {advModal && (
-        <Modal title={`Advance ${advModal.orderNum}`} onClose={() => setAdvModal(null)} width={480}>
+        <Modal
+          title={`Advance ${advModal.orderNum}`}
+          onClose={() => setAdvModal(null)}
+          width={STAGE_NEXT[advModal.fulfillmentStage] === "picked" ? 680 : 480}
+        >
           <div
             style={{
               background: "#FFFFFF",
@@ -323,6 +369,209 @@ export default function PipelineView({ data, setData }) {
               </span>
             </div>
           </div>
+
+          {/* ============================================================= */}
+          {/* CONFIRMED -> PICKED: Editable pick quantities                  */}
+          {/* ============================================================= */}
+          {STAGE_NEXT[advModal.fulfillmentStage] === "picked" && (
+            <div>
+              {/* Callout reminder */}
+              <div
+                style={{
+                  background: "#FFF7ED",
+                  border: "1px solid #FED7AA",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  marginBottom: 16,
+                  fontSize: 12,
+                  color: "#9A3412",
+                }}
+              >
+                <strong>Confirm actual quantities picked.</strong> Adjust the "Qty Filled"
+                below to match what was actually pulled from the warehouse. Any shortfall
+                will be placed on backorder and reflected in your fill rate.
+              </div>
+
+              {/* Editable line-item grid */}
+              <div
+                style={{
+                  background: "#FFFFFF",
+                  border: "1px solid #E2E8F0",
+                  borderRadius: 10,
+                  overflow: "hidden",
+                  marginBottom: 16,
+                }}
+              >
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: "#F1F5F9" }}>
+                      <th style={{ padding: "8px 12px", textAlign: "left", color: "#64748B", fontSize: 10, fontWeight: 700, textTransform: "uppercase" }}>
+                        Product
+                      </th>
+                      <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748B", fontSize: 10, fontWeight: 700, textTransform: "uppercase", width: 70 }}>
+                        Ordered
+                      </th>
+                      <th style={{ padding: "8px 12px", textAlign: "center", color: "#64748B", fontSize: 10, fontWeight: 700, textTransform: "uppercase", width: 100 }}>
+                        Qty Filled
+                      </th>
+                      <th style={{ padding: "8px 12px", textAlign: "right", color: "#64748B", fontSize: 10, fontWeight: 700, textTransform: "uppercase", width: 80 }}>
+                        Backorder
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {advModal.lines.map((l, i) => {
+                      const prod = prodMap[l.productId];
+                      const pq = pickQtys[i] || { qtyFilled: 0 };
+                      const bo = l.qty - pq.qtyFilled;
+                      return (
+                        <tr
+                          key={i}
+                          style={{
+                            borderBottom: "1px solid #F1F5F9",
+                            background: bo > 0 ? "#FFF7ED" : "transparent",
+                          }}
+                        >
+                          <td style={{ padding: "8px 12px" }}>
+                            <div style={{ fontWeight: 600, color: "#0F172A", fontSize: 12 }}>
+                              {prod ? prod.name : l.productId}
+                            </div>
+                            <div style={{ fontFamily: "monospace", fontSize: 10, color: "#64748B" }}>
+                              {prod ? prod.sku : ""}
+                            </div>
+                          </td>
+                          <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: "#0F172A" }}>
+                            {l.qty}
+                          </td>
+                          <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                            <input
+                              type="number"
+                              min="0"
+                              max={l.qty}
+                              value={pq.qtyFilled}
+                              onChange={(e) => {
+                                const val = Math.max(0, Math.min(l.qty, parseInt(e.target.value) || 0));
+                                setPickQtys((prev) =>
+                                  prev.map((p, j) =>
+                                    j === i ? { ...p, qtyFilled: val } : p,
+                                  ),
+                                );
+                              }}
+                              style={{
+                                width: 64,
+                                padding: "5px 8px",
+                                border: `2px solid ${bo > 0 ? "#F97316" : "#BBF7D0"}`,
+                                borderRadius: 6,
+                                textAlign: "center",
+                                fontSize: 13,
+                                fontWeight: 700,
+                                color: "#0F172A",
+                                outline: "none",
+                                fontFamily: "inherit",
+                                background: bo > 0 ? "#FFF7ED" : "#F0FDF4",
+                              }}
+                            />
+                          </td>
+                          <td
+                            style={{
+                              padding: "8px 12px",
+                              textAlign: "right",
+                              fontWeight: bo > 0 ? 700 : 400,
+                              color: bo > 0 ? "#DC2626" : "#94A3B8",
+                            }}
+                          >
+                            {bo > 0 ? bo : "--"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                {/* Totals bar */}
+                <div
+                  style={{
+                    padding: "10px 16px",
+                    borderTop: "1px solid #E2E8F0",
+                    background: "#F8FAFC",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  <span style={{ color: "#64748B" }}>
+                    {fmtNum(pickTotalFilled)} of {fmtNum(pickTotalOrdered)} units filled
+                    {pickTotalBO > 0 && (
+                      <span style={{ color: "#DC2626" }}> &middot; {fmtNum(pickTotalBO)} backordered</span>
+                    )}
+                  </span>
+                  <span
+                    style={{
+                      background: pickFillRate >= 95 ? "#F0FDF4" : pickFillRate >= 80 ? "#FEFCE8" : "#FEF2F2",
+                      color: pickFillRate >= 95 ? "#15803D" : pickFillRate >= 80 ? "#854D0E" : "#B91C1C",
+                      border: `1px solid ${pickFillRate >= 95 ? "#BBF7D0" : pickFillRate >= 80 ? "#FDE68A" : "#FECACA"}`,
+                      borderRadius: 20,
+                      padding: "2px 12px",
+                      fontSize: 12,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {pickFillRate.toFixed(0)}% Fill Rate
+                  </span>
+                </div>
+              </div>
+
+              {/* Backorder warning if fill rate < 100% */}
+              {pickTotalBO > 0 && (
+                <div
+                  style={{
+                    background: "#FEF2F2",
+                    border: "1px solid #FECACA",
+                    borderRadius: 10,
+                    padding: "10px 14px",
+                    marginBottom: 16,
+                    fontSize: 12,
+                    color: "#B91C1C",
+                  }}
+                >
+                  <strong>{fmtNum(pickTotalBO)} units</strong> will be placed on backorder.
+                  These will auto-fill when inventory is received via Supplier POs.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ============================================================= */}
+          {/* PICKED -> BOOKED: Reminder callout                             */}
+          {/* ============================================================= */}
+          {STAGE_NEXT[advModal.fulfillmentStage] === "booked" && (
+            <div
+              style={{
+                background: "#F0F9FF",
+                border: "1px solid #BAE6FD",
+                borderRadius: 10,
+                padding: "10px 14px",
+                marginBottom: 16,
+                fontSize: 12,
+                color: "#0369A1",
+              }}
+            >
+              <strong>Quantities were confirmed at pick.</strong>{" "}
+              {advModal.lines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0)} units
+              filled of {advModal.lines.reduce((s, l) => s + l.qty, 0)} ordered.
+              {advModal.lines.some((l) => (l.qtyBackordered || 0) > 0) && (
+                <span style={{ color: "#DC2626", fontWeight: 700 }}>
+                  {" "}{advModal.lines.reduce((s, l) => s + (l.qtyBackordered || 0), 0)} on backorder.
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* ============================================================= */}
+          {/* BOOKED -> SHIPPED: Shipping info                               */}
+          {/* ============================================================= */}
           {STAGE_NEXT[advModal.fulfillmentStage] === "shipped" && (
             <div>
               <div
@@ -368,6 +617,7 @@ export default function PipelineView({ data, setData }) {
               </Field>
             </div>
           )}
+
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
             <button style={BS} onClick={() => setAdvModal(null)}>
               Cancel

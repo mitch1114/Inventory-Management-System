@@ -24,13 +24,31 @@ export function computeInventory(products, salesOrders) {
   }));
 }
 
-export function advanceStage(data, orderId, newStage, shipInfo) {
+// adjustedLines: optional array of { productId, qtyFilled } to override fill quantities
+export function advanceStage(data, orderId, newStage, shipInfo, adjustedLines) {
   const order = data.salesOrders.find((o) => o.id === orderId);
   if (!order) return data;
+
+  // Build updated order lines if adjusted quantities were provided
+  let updatedOrderLines = order.lines;
+  if (adjustedLines) {
+    const adjMap = {};
+    adjustedLines.forEach((a) => { adjMap[a.productId] = a.qtyFilled; });
+    updatedOrderLines = order.lines.map((l) => {
+      if (adjMap[l.productId] == null) return l;
+      const newFilled = Math.max(0, Math.min(l.qty, adjMap[l.productId]));
+      return {
+        ...l,
+        qtyFilled: newFilled,
+        qtyBackordered: l.qty - newFilled,
+      };
+    });
+  }
+
   let products = data.products;
   if (newStage === "shipped") {
     products = products.map((p) => {
-      const deduct = order.lines
+      const deduct = updatedOrderLines
         .filter((l) => l.productId === p.id)
         .reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0);
       return deduct > 0 ? { ...p, onHand: Math.max(0, p.onHand - deduct) } : p;
@@ -38,13 +56,25 @@ export function advanceStage(data, orderId, newStage, shipInfo) {
   }
   const salesOrders = data.salesOrders.map((o) =>
     o.id === orderId
-      ? { ...o, fulfillmentStage: newStage, shipment: shipInfo || o.shipment || {} }
+      ? { ...o, fulfillmentStage: newStage, lines: updatedOrderLines, shipment: shipInfo || o.shipment || {} }
       : o,
   );
-  const desc =
-    newStage === "shipped"
-      ? `Shipped ${order.orderNum} -> ${order.customer}${shipInfo && shipInfo.carrier ? " * " + shipInfo.carrier + (shipInfo.trackingNum ? " " + shipInfo.trackingNum : "") : ""}`
-      : `${order.orderNum} -> ${STAGE_LABEL[newStage]} (${order.customer})`;
+
+  // Build audit description
+  const totalOrdered = updatedOrderLines.reduce((s, l) => s + l.qty, 0);
+  const totalFilled = updatedOrderLines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0);
+  const totalBO = updatedOrderLines.reduce((s, l) => s + (l.qtyBackordered != null ? l.qtyBackordered : 0), 0);
+  const fillPct = totalOrdered > 0 ? Math.round((totalFilled / totalOrdered) * 100) : 100;
+
+  let desc;
+  if (newStage === "shipped") {
+    desc = `Shipped ${order.orderNum} -> ${order.customer}${shipInfo && shipInfo.carrier ? " * " + shipInfo.carrier + (shipInfo.trackingNum ? " " + shipInfo.trackingNum : "") : ""}`;
+  } else if (newStage === "picked" && adjustedLines) {
+    desc = `${order.orderNum} -> ${STAGE_LABEL[newStage]} (${order.customer}) -- ${totalFilled}/${totalOrdered} units filled (${fillPct}%)${totalBO > 0 ? ` * ${totalBO} backordered` : ""}`;
+  } else {
+    desc = `${order.orderNum} -> ${STAGE_LABEL[newStage]} (${order.customer})`;
+  }
+
   const auditLog = [
     ...(data.auditLog || []),
     {
