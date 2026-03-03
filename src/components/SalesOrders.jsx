@@ -2,7 +2,8 @@ import { useState, useMemo } from "react";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING } from "../lib/constants";
 import { computeInventory, advanceStage } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
-import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq } from "./ui";
+import { isQboConnected, fetchInvoices } from "../lib/qbo";
+import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
 
 // --- OrderDrawer (detail panel) ------------------------------------------------
@@ -314,6 +315,39 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
           </div>
         )}
 
+        {/* Linked QBO Invoice */}
+        {order.qboInvoice && (
+          <div
+            style={{
+              background: "#F0FDF4",
+              border: "1px solid #BBF7D0",
+              borderRadius: 10,
+              padding: "10px 14px",
+              marginBottom: 18,
+              fontSize: 13,
+              color: "#15803D",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <div>
+              <strong>QB Invoice:</strong> #{order.qboInvoice.docNumber || order.qboInvoice.qboId}
+              {" -- "}{fmt(order.qboInvoice.totalAmount)}
+              {order.qboInvoice.status === "paid" && (
+                <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, background: "#DCFCE7", padding: "2px 8px", borderRadius: 8 }}>
+                  PAID
+                </span>
+              )}
+              {order.qboInvoice.balance > 0 && (
+                <span style={{ marginLeft: 8, fontSize: 11, color: "#EA580C" }}>
+                  ({fmt(order.qboInvoice.balance)} due)
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Notes */}
         {order.notes && (
           <div
@@ -597,6 +631,13 @@ export default function SalesOrders({ data, setData }) {
   const [form, setForm] = useState(blankOrder());
   const [showImport, setShowImport] = useState(false);
 
+  // Invoice linking
+  const [invoiceModal, setInvoiceModal] = useState(null); // order to view invoice for
+  const [invoicePicker, setInvoicePicker] = useState(null); // order to pick invoice for
+  const [invoiceCandidates, setInvoiceCandidates] = useState(null);
+  const [invoiceFetching, setInvoiceFetching] = useState(false);
+  const [invoiceError, setInvoiceError] = useState(null);
+
   const prodMap = useMemo(
     () => Object.fromEntries(data.products.map((p) => [p.id, p])),
     [data.products],
@@ -611,6 +652,50 @@ export default function SalesOrders({ data, setData }) {
     () => Object.fromEntries(computedProds.map((p) => [p.id, p])),
     [computedProds],
   );
+
+  // --- Invoice linking helpers --------------------------------------------------
+  const doFetchInvoiceForOrder = async (order) => {
+    setInvoicePicker(order);
+    setInvoiceFetching(true);
+    setInvoiceError(null);
+    setInvoiceCandidates(null);
+    try {
+      // Search QBO invoices around the order date range
+      const result = await fetchInvoices({
+        startDate: order.date,
+        maxResults: 50,
+      });
+      setInvoiceCandidates(result.salesOrders || []);
+    } catch (err) {
+      setInvoiceError(err.message);
+    }
+    setInvoiceFetching(false);
+  };
+
+  const linkInvoice = (order, invoice) => {
+    setData((d) => ({
+      ...d,
+      salesOrders: d.salesOrders.map((o) =>
+        o.id === order.id
+          ? {
+              ...o,
+              qboInvoice: {
+                qboId: invoice.qboId,
+                docNumber: invoice.qboDocNumber,
+                customer: invoice.customer,
+                date: invoice.date,
+                totalAmount: invoice.totalAmount,
+                balance: invoice.balance,
+                status: invoice.status,
+                lines: invoice.lines,
+              },
+            }
+          : o,
+      ),
+    }));
+    setInvoicePicker(null);
+    setInvoiceCandidates(null);
+  };
 
   // Filtered + sorted orders
   const filtered = useMemo(() => {
@@ -886,7 +971,7 @@ export default function SalesOrders({ data, setData }) {
 
       {/* Orders table */}
       <Table
-        headers={["Order #", "Customer", "Date", "Stage", "Type", "Lines", "Value", "Notes"]}
+        headers={["Order #", "Customer", "Date", "Stage", "Invoice", "Type", "Lines", "Value", "Notes"]}
         empty={filtered.length === 0 ? "No sales orders match your filters." : null}
       >
         {filtered.map((o, i) => {
@@ -929,6 +1014,47 @@ export default function SalesOrders({ data, setData }) {
                   status={o.fulfillmentStage}
                   label={STAGE_LABEL[o.fulfillmentStage] || o.fulfillmentStage}
                 />
+              </TD>
+              <TD>
+                {o.qboInvoice ? (
+                  <span
+                    onClick={() => setInvoiceModal(o)}
+                    style={{
+                      cursor: "pointer",
+                      color: "#15803D",
+                      fontWeight: 700,
+                      fontSize: 12,
+                      fontFamily: "monospace",
+                      textDecoration: "underline",
+                      textUnderlineOffset: 2,
+                    }}
+                  >
+                    #{o.qboInvoice.docNumber || o.qboInvoice.qboId}
+                  </span>
+                ) : o.fulfillmentStage === "shipped" && isQboConnected() ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      doFetchInvoiceForOrder(o);
+                    }}
+                    style={{
+                      background: "#F0FDF4",
+                      border: "1px solid #BBF7D0",
+                      borderRadius: 6,
+                      padding: "3px 10px",
+                      color: "#15803D",
+                      fontWeight: 600,
+                      fontSize: 11,
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Link Invoice
+                  </button>
+                ) : (
+                  <span style={{ color: "#CBD5E1", fontSize: 12 }}>--</span>
+                )}
               </TD>
               <TD>
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -1179,6 +1305,341 @@ export default function SalesOrders({ data, setData }) {
           setData={setData}
           onClose={() => setShowImport(false)}
         />
+      )}
+
+      {/* Invoice Detail Modal */}
+      {invoiceModal && invoiceModal.qboInvoice && (
+        <Modal
+          title={`Invoice #${invoiceModal.qboInvoice.docNumber || invoiceModal.qboInvoice.qboId}`}
+          onClose={() => setInvoiceModal(null)}
+          width={640}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "10px 20px",
+              marginBottom: 18,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
+                Customer
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#0F172A" }}>
+                {invoiceModal.qboInvoice.customer}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
+                Invoice Date
+              </div>
+              <div style={{ fontSize: 14, color: "#334155" }}>
+                {fmtDate(invoiceModal.qboInvoice.date)}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
+                Linked Order
+              </div>
+              <div style={{ fontSize: 14, fontFamily: "monospace", fontWeight: 600, color: "#6D28D9" }}>
+                {invoiceModal.orderNum}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
+                Status
+              </div>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "2px 10px",
+                  borderRadius: 10,
+                  background: invoiceModal.qboInvoice.status === "paid" ? "#F0FDF4" : invoiceModal.qboInvoice.status === "overdue" ? "#FEF2F2" : "#EFF6FF",
+                  color: invoiceModal.qboInvoice.status === "paid" ? "#15803D" : invoiceModal.qboInvoice.status === "overdue" ? "#DC2626" : "#2563EB",
+                  textTransform: "uppercase",
+                }}
+              >
+                {invoiceModal.qboInvoice.status}
+              </span>
+            </div>
+          </div>
+
+          {/* Summary strip */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
+            <div
+              style={{
+                background: "#F0FDF4",
+                border: "1px solid #BBF7D0",
+                borderRadius: 10,
+                padding: "10px 14px",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#15803D" }}>
+                {fmt(invoiceModal.qboInvoice.totalAmount)}
+              </div>
+              <div style={{ fontSize: 10, color: "#64748B", fontWeight: 600, textTransform: "uppercase" }}>
+                Total Amount
+              </div>
+            </div>
+            <div
+              style={{
+                background: invoiceModal.qboInvoice.balance > 0 ? "#FFF7ED" : "#F8FAFC",
+                border: `1px solid ${invoiceModal.qboInvoice.balance > 0 ? "#FED7AA" : "#E2E8F0"}`,
+                borderRadius: 10,
+                padding: "10px 14px",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontSize: 18, fontWeight: 800, color: invoiceModal.qboInvoice.balance > 0 ? "#EA580C" : "#15803D" }}>
+                {fmt(invoiceModal.qboInvoice.balance)}
+              </div>
+              <div style={{ fontSize: 10, color: "#64748B", fontWeight: 600, textTransform: "uppercase" }}>
+                Balance Due
+              </div>
+            </div>
+          </div>
+
+          {/* Invoice line items */}
+          <div style={{ fontWeight: 700, fontSize: 13, color: "#334155", marginBottom: 10 }}>
+            Invoiced Items ({invoiceModal.qboInvoice.lines.length})
+          </div>
+          <div
+            style={{
+              background: "#FFFFFF",
+              border: "1px solid #E2E8F0",
+              borderRadius: 10,
+              overflow: "hidden",
+            }}
+          >
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" }}>
+                  {["Item", "Qty", "Price", "Amount"].map((h) => (
+                    <th
+                      key={h}
+                      style={{
+                        padding: "9px 12px",
+                        textAlign: h === "Amount" || h === "Price" ? "right" : "left",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: "#94A3B8",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {invoiceModal.qboInvoice.lines.map((l, i) => (
+                  <tr
+                    key={i}
+                    style={{
+                      borderBottom: "1px solid #F1F5F9",
+                      background: i % 2 === 0 ? "transparent" : "#FAFAFA",
+                    }}
+                  >
+                    <td style={{ padding: "9px 12px", fontSize: 13, color: "#334155" }}>
+                      {l.qboItemName || "Unknown Item"}
+                    </td>
+                    <td style={{ padding: "9px 12px", fontSize: 13, fontWeight: 600, color: "#0F172A" }}>
+                      {l.qty}
+                    </td>
+                    <td style={{ padding: "9px 12px", fontSize: 12, fontFamily: "monospace", color: "#374151", textAlign: "right" }}>
+                      {fmt(l.price)}
+                    </td>
+                    <td style={{ padding: "9px 12px", fontSize: 12, fontFamily: "monospace", fontWeight: 600, color: "#0F172A", textAlign: "right" }}>
+                      {fmt(l.amount || l.qty * l.price)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                padding: "10px 14px",
+                borderTop: "1px solid #E2E8F0",
+                background: "#F8FAFC",
+                fontWeight: 700,
+                fontSize: 14,
+                color: "#15803D",
+              }}
+            >
+              Total: {fmt(invoiceModal.qboInvoice.totalAmount)}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+            <button
+              style={BD}
+              onClick={() => {
+                if (!window.confirm("Unlink this invoice from the order?")) return;
+                setData((d) => ({
+                  ...d,
+                  salesOrders: d.salesOrders.map((o) =>
+                    o.id === invoiceModal.id ? { ...o, qboInvoice: undefined } : o,
+                  ),
+                }));
+                setInvoiceModal(null);
+              }}
+            >
+              Unlink Invoice
+            </button>
+            <button style={BS} onClick={() => setInvoiceModal(null)}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Invoice Picker Modal */}
+      {invoicePicker && (
+        <Modal
+          title={`Link Invoice to ${invoicePicker.orderNum}`}
+          onClose={() => {
+            setInvoicePicker(null);
+            setInvoiceCandidates(null);
+            setInvoiceError(null);
+          }}
+          width={700}
+        >
+          <div
+            style={{
+              background: "#F8FAFC",
+              borderRadius: 10,
+              padding: "10px 14px",
+              marginBottom: 16,
+              fontSize: 12,
+              color: "#475569",
+            }}
+          >
+            Select the QuickBooks invoice that matches <strong>{invoicePicker.orderNum}</strong> ({invoicePicker.customer}, {fmtDate(invoicePicker.date)})
+          </div>
+
+          {invoiceError && (
+            <div
+              style={{
+                padding: "8px 14px",
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 600,
+                background: "#FEF2F2",
+                color: "#B91C1C",
+                border: "1px solid #FECACA",
+                marginBottom: 14,
+              }}
+            >
+              {invoiceError}
+            </div>
+          )}
+
+          {invoiceFetching && (
+            <div style={{ textAlign: "center", padding: 30, color: "#64748B", fontSize: 13 }}>
+              Fetching invoices from QuickBooks...
+            </div>
+          )}
+
+          {invoiceCandidates && invoiceCandidates.length === 0 && (
+            <div style={{ textAlign: "center", padding: 30, color: "#94A3B8", fontSize: 13 }}>
+              No invoices found. Make sure the invoice exists in QuickBooks Online.
+            </div>
+          )}
+
+          {invoiceCandidates && invoiceCandidates.length > 0 && (
+            <div style={{ maxHeight: 400, overflow: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" }}>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Invoice #</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Customer</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Date</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Amount</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Status</th>
+                    <th style={{ padding: "8px 10px", textAlign: "center", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoiceCandidates.map((inv, i) => {
+                    const customerMatch =
+                      inv.customer.toLowerCase() === invoicePicker.customer.toLowerCase();
+                    return (
+                      <tr
+                        key={inv.qboId}
+                        style={{
+                          borderBottom: "1px solid #F1F5F9",
+                          background: customerMatch ? "#F0FDF4" : i % 2 === 0 ? "transparent" : "#FAFAFA",
+                        }}
+                      >
+                        <td style={{ padding: "8px 10px", fontWeight: 600, fontFamily: "monospace" }}>
+                          {inv.qboDocNumber || inv.qboId}
+                        </td>
+                        <td style={{ padding: "8px 10px" }}>
+                          {inv.customer}
+                          {customerMatch && (
+                            <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: "#15803D", background: "#DCFCE7", padding: "1px 6px", borderRadius: 6 }}>
+                              MATCH
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ padding: "8px 10px", color: "#64748B" }}>{fmtDate(inv.date)}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", fontWeight: 600, color: "#15803D" }}>
+                          ${inv.totalAmount.toFixed(2)}
+                        </td>
+                        <td style={{ padding: "8px 10px" }}>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              padding: "2px 8px",
+                              borderRadius: 10,
+                              background: inv.status === "paid" ? "#F0FDF4" : inv.status === "overdue" ? "#FEF2F2" : "#EFF6FF",
+                              color: inv.status === "paid" ? "#15803D" : inv.status === "overdue" ? "#DC2626" : "#2563EB",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {inv.status}
+                          </span>
+                        </td>
+                        <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                          <button
+                            onClick={() => linkInvoice(invoicePicker, inv)}
+                            style={{
+                              ...BG,
+                              padding: "4px 12px",
+                              fontSize: 11,
+                            }}
+                          >
+                            Link
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+            <button
+              style={BS}
+              onClick={() => {
+                setInvoicePicker(null);
+                setInvoiceCandidates(null);
+                setInvoiceError(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );
