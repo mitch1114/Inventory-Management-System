@@ -14,13 +14,12 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const apiKey = process.env.SHIPSTATION_API_KEY;
-  const apiSecret = process.env.SHIPSTATION_API_SECRET || "";
-  if (!apiKey) {
-    return res.status(500).json({ error: "ShipStation API key not configured" });
+  const apiSecret = process.env.SHIPSTATION_API_SECRET;
+  if (!apiKey || !apiSecret) {
+    return res.status(500).json({ error: "ShipStation API credentials not configured. Both SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET are required." });
   }
 
-  // ShipStation uses Basic Auth -- key:secret, or just the key if no separate secret
-  const auth = Buffer.from(apiSecret ? `${apiKey}:${apiSecret}` : apiKey).toString("base64");
+  const auth = Buffer.from(`${apiKey}:${apiSecret}`).toString("base64");
 
   try {
     const { order } = req.body;
