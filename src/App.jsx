@@ -294,7 +294,7 @@ export default function App() {
         {tab === "customers" && <Customers data={data} setData={setData} />}
         {tab === "reports" && <Reports data={data} />}
         {tab === "audit" && <AuditLog data={data} setData={setData} />}
-        {tab === "settings" && <Settings />}
+        {tab === "settings" && <Settings data={data} setData={setData} />}
       </div>
     </div>
   );
