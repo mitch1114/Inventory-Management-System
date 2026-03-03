@@ -11,15 +11,16 @@ export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
   const apiKey = process.env.SHIPSTATION_API_KEY;
-  const apiSecret = process.env.SHIPSTATION_API_SECRET;
-  if (!apiKey || !apiSecret) {
+  const apiSecret = process.env.SHIPSTATION_API_SECRET || "";
+  if (!apiKey) {
     return res.status(200).json({
       connected: false,
-      error: "ShipStation API credentials not configured. Add SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET to your Vercel environment variables.",
+      error: "ShipStation API key not configured. Add SHIPSTATION_API_KEY to your Vercel environment variables.",
     });
   }
 
-  const auth = Buffer.from(`${apiKey}:${apiSecret}`).toString("base64");
+  // ShipStation uses Basic Auth -- key:secret, or just the key if no separate secret
+  const auth = Buffer.from(apiSecret ? `${apiKey}:${apiSecret}` : apiKey).toString("base64");
 
   try {
     // Simple request to verify credentials -- list stores

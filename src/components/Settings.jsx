@@ -76,9 +76,10 @@ export default function Settings() {
           <div style={{ fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>How it works:</div>
           <ol style={{ margin: 0, paddingLeft: 18 }}>
             <li>
-              Add <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>SHIPSTATION_API_KEY</code>{" "}
-              and <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>SHIPSTATION_API_SECRET</code>{" "}
-              to your Vercel environment variables.
+              Add your <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>SHIPSTATION_API_KEY</code>{" "}
+              to your Vercel environment variables. If your account also has a separate API Secret, add{" "}
+              <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>SHIPSTATION_API_SECRET</code>{" "}
+              as well (optional).
             </li>
             <li>
               When an order advances to <strong>Booked</strong> in the pipeline, it auto-pushes to ShipStation.
@@ -113,7 +114,7 @@ export default function Settings() {
                   SHIPSTATION_API_KEY
                 </td>
                 <td style={{ padding: "8px 0", color: "#64748B" }}>
-                  Your ShipStation API Key (from Account &rarr; API Settings)
+                  <strong>Required.</strong> Your ShipStation API Key (Account &rarr; Settings &rarr; API Settings)
                 </td>
               </tr>
               <tr>
@@ -121,7 +122,7 @@ export default function Settings() {
                   SHIPSTATION_API_SECRET
                 </td>
                 <td style={{ padding: "8px 0", color: "#64748B" }}>
-                  Your ShipStation API Secret
+                  Optional. Only needed if your account shows a separate API Secret.
                 </td>
               </tr>
             </tbody>
