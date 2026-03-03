@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
-import { uid, fmt, fmtNum, nowIso, toCSV, dlCSV } from "../lib/utils";
-import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD } from "./ui";
+import { useState, useMemo, useRef } from "react";
+import { uid, fmt, fmtNum, nowIso, toCSV, dlCSV, parseCSV } from "../lib/utils";
+import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq } from "./ui";
 
 // --- Helpers -----------------------------------------------------------------
 const blank = () => ({
@@ -16,6 +16,8 @@ export default function Customers({ data, setData }) {
   const [editing, setEditing] = useState(null); // null | "new" | customer object
   const [form, setForm] = useState(blank());
   const [search, setSearch] = useState("");
+  const [importResult, setImportResult] = useState(null);
+  const fileRef = useRef(null);
 
   // Per-customer order count and lifetime value
   const stats = useMemo(() => {
@@ -146,6 +148,114 @@ export default function Customers({ data, setData }) {
     dlCSV(csv, "customers.csv");
   };
 
+  // --- CSV Import ------------------------------------------------------------
+  const handleImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = "";
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const rows = parseCSV(ev.target.result);
+      if (rows.length === 0) {
+        setImportResult({ error: "No data rows found in CSV." });
+        return;
+      }
+
+      // Detect columns (case-insensitive, flexible)
+      const headers = Object.keys(rows[0]);
+      const find = (aliases) =>
+        headers.find((h) => aliases.includes(h.toLowerCase().trim())) || null;
+
+      const nameCol = find(["name", "customer", "customer name", "company", "company name"]);
+      const typeCol = find(["type", "customer type", "account type", "category"]);
+      const emailCol = find(["email", "e-mail", "email address"]);
+      const phoneCol = find(["phone", "phone number", "telephone", "tel"]);
+      const addressCol = find(["address", "street", "location", "ship to", "shipping address"]);
+
+      if (!nameCol) {
+        setImportResult({
+          error: `Could not find a "Name" column. Found columns: ${headers.join(", ")}`,
+        });
+        return;
+      }
+
+      const existingNames = new Set(
+        data.customers.map((c) => c.name.toLowerCase().trim()),
+      );
+
+      let added = 0;
+      let skipped = 0;
+      let updated = 0;
+      const newCustomers = [...data.customers];
+
+      for (const row of rows) {
+        const name = (row[nameCol] || "").trim();
+        if (!name) {
+          skipped++;
+          continue;
+        }
+
+        const type = typeCol ? (row[typeCol] || "").trim().toLowerCase() : "";
+        const validTypes = ["dealer", "distributor", "retailer"];
+        const resolvedType = validTypes.includes(type) ? type : "dealer";
+
+        const email = emailCol ? (row[emailCol] || "").trim() : "";
+        const phone = phoneCol ? (row[phoneCol] || "").trim() : "";
+        const address = addressCol ? (row[addressCol] || "").trim() : "";
+
+        // Check for existing customer (by name, case-insensitive)
+        const existingIdx = newCustomers.findIndex(
+          (c) => c.name.toLowerCase().trim() === name.toLowerCase(),
+        );
+
+        if (existingIdx !== -1) {
+          // Update existing customer with any non-empty fields from CSV
+          const existing = newCustomers[existingIdx];
+          newCustomers[existingIdx] = {
+            ...existing,
+            type: type ? resolvedType : existing.type,
+            email: email || existing.email,
+            phone: phone || existing.phone,
+            address: address || existing.address,
+          };
+          updated++;
+        } else {
+          newCustomers.push({
+            id: uid(),
+            name,
+            type: resolvedType,
+            email,
+            phone,
+            address,
+          });
+          added++;
+        }
+      }
+
+      setData((d) => ({
+        ...d,
+        customers: newCustomers,
+        auditLog: [
+          ...(d.auditLog || []),
+          {
+            id: uid(),
+            ts: nowIso(),
+            type: "dealer-import",
+            entity: "Customer Import",
+            description: `CSV import: ${added} added, ${updated} updated, ${skipped} skipped`,
+          },
+        ],
+      }));
+
+      setImportResult({
+        success: true,
+        message: `Imported ${rows.length} row${rows.length !== 1 ? "s" : ""}: ${added} added, ${updated} updated${skipped > 0 ? `, ${skipped} skipped (no name)` : ""}`,
+      });
+    };
+    reader.readAsText(file);
+  };
+
   // --- Render ----------------------------------------------------------------
   return (
     <div>
@@ -173,6 +283,16 @@ export default function Customers({ data, setData }) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          <button style={BAq} onClick={() => fileRef.current?.click()}>
+            Import CSV
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv"
+            style={{ display: "none" }}
+            onChange={handleImport}
+          />
           <button style={BS} onClick={exportCSV}>
             Export CSV
           </button>
@@ -181,6 +301,33 @@ export default function Customers({ data, setData }) {
           </button>
         </div>
       </div>
+
+      {/* Import result banner */}
+      {importResult && (
+        <div
+          style={{
+            background: importResult.success ? "#F0FDF4" : "#FEF2F2",
+            border: `1px solid ${importResult.success ? "#BBF7D0" : "#FECACA"}`,
+            borderRadius: 10,
+            padding: "12px 18px",
+            marginBottom: 16,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontSize: 14,
+            color: importResult.success ? "#15803D" : "#DC2626",
+            fontWeight: 600,
+          }}
+        >
+          <span>{importResult.message || importResult.error}</span>
+          <button
+            style={{ ...BS, padding: "5px 12px", fontSize: 12 }}
+            onClick={() => setImportResult(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Customer Table */}
       <Table
