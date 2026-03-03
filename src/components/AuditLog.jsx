@@ -12,6 +12,7 @@ const LOG_TYPES = [
   { key: "received", label: "PO Received" },
   { key: "adjustment", label: "Adjustment" },
   { key: "auto-allocated", label: "Auto-Allocated" },
+  { key: "receiving-variance", label: "Receiving Variance" },
 ];
 
 // --- Component ---------------------------------------------------------------

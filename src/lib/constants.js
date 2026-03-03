@@ -38,6 +38,7 @@ export const SC = {
   "stage-advance": { bg: "#ECFEFF", text: "#0E7490", dot: "#06B6D4", border: "#A5F3FC" },
   "dealer-import": { bg: "#ECFEFF", text: "#0E7490", dot: "#06B6D4", border: "#A5F3FC" },
   "auto-allocated":{ bg: "#FAF5FF", text: "#6D28D9", dot: "#7C3AED", border: "#DDD6FE" },
+  "receiving-variance": { bg: "#FFFBEB", text: "#92400E", dot: "#F59E0B", border: "#FDE68A" },
   hold:            { bg: "#FEFCE8", text: "#854D0E", dot: "#CA8A04", border: "#FDE68A" },
 };
 

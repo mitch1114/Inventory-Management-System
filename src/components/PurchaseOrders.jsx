@@ -4,6 +4,7 @@ import { autoAllocate } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BG, BAq } from "./ui";
 import SupplierPOImport from "./SupplierPOImport";
+import ReceivingModal from "./ReceivingModal";
 
 // --- Helpers -----------------------------------------------------------------
 const blank = () => ({
@@ -24,6 +25,7 @@ export default function PurchaseOrders({ data, setData }) {
   const [allocResult, setAllocResult] = useState(null);
   const [search, setSearch] = useState("");
   const [showImport, setShowImport] = useState(false);
+  const [receiving, setReceiving] = useState(null); // PO being received
 
   // Derived lookups
   const prodMap = useMemo(
@@ -116,54 +118,8 @@ export default function PurchaseOrders({ data, setData }) {
     setEditing(null);
   };
 
-  // --- Receive PO ------------------------------------------------------------
-  const receivePO = (po) => {
-    const receivedLines = po.lines
-      .filter((l) => l.productId)
-      .map((l) => ({ productId: l.productId, qty: l.qty }));
-
-    // Add to on-hand
-    const updatedProducts = data.products.map((p) => {
-      const incoming = receivedLines
-        .filter((rl) => rl.productId === p.id)
-        .reduce((s, rl) => s + rl.qty, 0);
-      return incoming > 0 ? { ...p, onHand: p.onHand + incoming } : p;
-    });
-
-    // Mark PO as received
-    const updatedPOs = data.purchaseOrders.map((p) =>
-      p.id === po.id ? { ...p, status: "received" } : p,
-    );
-
-    const totalUnits = receivedLines.reduce((s, l) => s + l.qty, 0);
-    const logEntry = {
-      id: uid(),
-      ts: nowIso(),
-      type: "received",
-      entity: po.orderNum,
-      description: `Received ${po.orderNum} -- ${totalUnits} units from ${suppMap[po.supplierId]?.name || "Unknown"}`,
-    };
-
-    let next = {
-      ...data,
-      products: updatedProducts,
-      purchaseOrders: updatedPOs,
-      auditLog: [...(data.auditLog || []), logEntry],
-    };
-
-    // Auto-allocate backorders
-    const before = (next.auditLog || []).length;
-    next = autoAllocate(next, receivedLines);
-    const after = (next.auditLog || []).length;
-    const filled = after - before;
-
-    setData(next);
-    setAllocResult(
-      filled > 0
-        ? `Received ${po.orderNum}. Auto-filled ${filled} backorder${filled > 1 ? "s" : ""}.`
-        : `Received ${po.orderNum}. No backorders to fill.`,
-    );
-  };
+  // --- Receive PO (opens modal) -----------------------------------------------
+  const receivePO = (po) => setReceiving(po);
 
   // --- Delete ----------------------------------------------------------------
   const deletePO = (po) => {
@@ -285,7 +241,7 @@ export default function PurchaseOrders({ data, setData }) {
                   >
                     Edit
                   </button>
-                  {po.status === "ordered" && (
+                  {(po.status === "ordered" || po.status === "partial") && (
                     <button
                       style={{ ...BG, padding: "5px 10px", fontSize: 11 }}
                       onClick={() => receivePO(po)}
@@ -472,6 +428,17 @@ export default function PurchaseOrders({ data, setData }) {
           data={data}
           setData={setData}
           onClose={() => setShowImport(false)}
+        />
+      )}
+
+      {/* Receiving Modal */}
+      {receiving && (
+        <ReceivingModal
+          po={receiving}
+          data={data}
+          setData={setData}
+          onClose={() => setReceiving(null)}
+          onResult={(msg) => setAllocResult(msg)}
         />
       )}
     </div>
