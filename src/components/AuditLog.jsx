@@ -13,6 +13,7 @@ const LOG_TYPES = [
   { key: "adjustment", label: "Adjustment" },
   { key: "auto-allocated", label: "Auto-Allocated" },
   { key: "receiving-variance", label: "Receiving Variance" },
+  { key: "cycle-count", label: "Cycle Count" },
 ];
 
 // --- Component ---------------------------------------------------------------

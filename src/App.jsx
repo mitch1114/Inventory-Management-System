@@ -14,6 +14,7 @@ import Reports from "./components/Reports";
 import AuditLog from "./components/AuditLog";
 import Settings from "./components/Settings";
 import DemandPlanning from "./components/DemandPlanning";
+import CycleCount from "./components/CycleCount";
 import { defaultData } from "./lib/defaultData";
 
 const TABS = [
@@ -26,6 +27,7 @@ const TABS = [
   { key: "customers", label: "Customers", icon: "\u2B50" },
   { key: "reports", label: "Reports", icon: "\u2261" },
   { key: "planning", label: "Demand Planning", icon: "\u25C8" },
+  { key: "cyclecount", label: "Cycle Count", icon: "\u2714" },
   { key: "audit", label: "Audit Log", icon: "\u270E" },
   { key: "settings", label: "Settings", icon: "\u2699" },
 ];
@@ -296,6 +298,7 @@ export default function App() {
         {tab === "customers" && <Customers data={data} setData={setData} />}
         {tab === "reports" && <Reports data={data} />}
         {tab === "planning" && <DemandPlanning data={data} setData={setData} />}
+        {tab === "cyclecount" && <CycleCount data={data} setData={setData} />}
         {tab === "audit" && <AuditLog data={data} setData={setData} />}
         {tab === "settings" && <Settings data={data} setData={setData} />}
       </div>
