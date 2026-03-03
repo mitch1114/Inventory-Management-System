@@ -12,6 +12,7 @@ import Suppliers from "./components/Suppliers";
 import Customers from "./components/Customers";
 import Reports from "./components/Reports";
 import AuditLog from "./components/AuditLog";
+import Settings from "./components/Settings";
 import { defaultData } from "./lib/defaultData";
 
 const TABS = [
@@ -24,6 +25,7 @@ const TABS = [
   { key: "customers", label: "Customers", icon: "\u2B50" },
   { key: "reports", label: "Reports", icon: "\u2261" },
   { key: "audit", label: "Audit Log", icon: "\u270E" },
+  { key: "settings", label: "Settings", icon: "\u2699" },
 ];
 
 export default function App() {
@@ -292,6 +294,7 @@ export default function App() {
         {tab === "customers" && <Customers data={data} setData={setData} />}
         {tab === "reports" && <Reports data={data} />}
         {tab === "audit" && <AuditLog data={data} setData={setData} />}
+        {tab === "settings" && <Settings />}
       </div>
     </div>
   );

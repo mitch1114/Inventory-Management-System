@@ -1,13 +1,17 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING } from "../lib/constants";
 import { computeInventory, advanceStage } from "../lib/inventory";
-import { fmt, fmtNum, fmtDate, todayIso } from "../lib/utils";
+import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS } from "./ui";
+import { pushOrder, syncShipments } from "../lib/shipstation";
 
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
   const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso() });
   const [pickQtys, setPickQtys] = useState([]); // [{productId, qtyFilled}] for pick confirmation
+  const [ssPushing, setSsPushing] = useState(false); // ShipStation push in progress
+  const [ssSyncing, setSsSyncing] = useState(false); // ShipStation sync in progress
+  const [ssStatus, setSsStatus] = useState(""); // status message
   const computedProds = useMemo(
     () => computeInventory(data.products, data.salesOrders),
     [data.products, data.salesOrders],
@@ -45,7 +49,7 @@ export default function PipelineView({ data, setData }) {
     );
   };
 
-  const doAdvance = () => {
+  const doAdvance = async () => {
     const o = advModal;
     const next = STAGE_NEXT[o.fulfillmentStage];
     if (!next) return;
@@ -53,7 +57,97 @@ export default function PipelineView({ data, setData }) {
     const adjusted = next === "picked" ? pickQtys : null;
     setData((d) => advanceStage(d, o.id, next, next === "shipped" ? shipForm : null, adjusted));
     setAdvModal(null);
+
+    // Auto-push to ShipStation when order reaches "booked"
+    if (next === "booked") {
+      setSsPushing(true);
+      setSsStatus("");
+      try {
+        const result = await pushOrder(o, data.products);
+        if (result.success) {
+          setSsStatus(`Pushed ${o.orderNum} to ShipStation`);
+          // Store ShipStation order ID on the order
+          setData((d) => ({
+            ...d,
+            salesOrders: d.salesOrders.map((so) =>
+              so.id === o.id
+                ? { ...so, shipstationOrderId: result.shipstationOrderId }
+                : so,
+            ),
+            auditLog: [
+              ...(d.auditLog || []),
+              {
+                id: uid(),
+                ts: nowIso(),
+                type: "shipstation-push",
+                entity: o.orderNum,
+                description: `Pushed ${o.orderNum} to ShipStation (ID: ${result.shipstationOrderId})`,
+              },
+            ],
+          }));
+        } else {
+          setSsStatus(`ShipStation push failed: ${result.error || "Unknown error"}`);
+        }
+      } catch (err) {
+        setSsStatus(`ShipStation push failed: ${err.message}`);
+      }
+      setSsPushing(false);
+      setTimeout(() => setSsStatus(""), 6000);
+    }
   };
+
+  // Sync shipments from ShipStation -- checks booked orders for tracking updates
+  const doSyncShipments = useCallback(async () => {
+    const bookedOrders = data.salesOrders.filter((o) => o.fulfillmentStage === "booked");
+    if (bookedOrders.length === 0) {
+      setSsStatus("No booked orders to sync");
+      setTimeout(() => setSsStatus(""), 3000);
+      return;
+    }
+    setSsSyncing(true);
+    setSsStatus("Syncing with ShipStation...");
+    try {
+      const orderNums = bookedOrders.map((o) => o.orderNum);
+      const result = await syncShipments(orderNums);
+      if (result.success && result.shipments && result.shipments.length > 0) {
+        // Auto-advance shipped orders and apply tracking info
+        setData((d) => {
+          let updated = { ...d };
+          const logs = [];
+          for (const s of result.shipments) {
+            const order = updated.salesOrders.find((o) => o.orderNum === s.orderNumber && o.fulfillmentStage === "booked");
+            if (!order) continue;
+            const shipInfo = {
+              carrier: s.carrier || "",
+              trackingNum: s.trackingNum || "",
+              shipDate: s.shipDate || todayIso(),
+            };
+            updated = advanceStage(updated, order.id, "shipped", shipInfo);
+            logs.push({
+              id: uid(),
+              ts: nowIso(),
+              type: "shipstation-sync",
+              entity: order.orderNum,
+              description: `Auto-shipped ${order.orderNum} from ShipStation -- ${s.carrier} ${s.trackingNum}`,
+            });
+          }
+          return {
+            ...updated,
+            auditLog: [...(updated.auditLog || []), ...logs],
+          };
+        });
+        setSsStatus(`Synced ${result.shipments.length} shipment${result.shipments.length !== 1 ? "s" : ""} from ShipStation`);
+      } else if (result.success) {
+        setSsStatus("No new shipments found");
+      } else {
+        setSsStatus(`Sync failed: ${result.error || "Unknown error"}`);
+      }
+    } catch (err) {
+      setSsStatus(`Sync failed: ${err.message}`);
+    }
+    setSsSyncing(false);
+    setTimeout(() => setSsStatus(""), 6000);
+  }, [data.salesOrders, data.products, setData]);
 
   // Pick modal stats
   const pickTotalOrdered = advModal ? advModal.lines.reduce((s, l) => s + l.qty, 0) : 0;
@@ -72,6 +166,62 @@ export default function PipelineView({ data, setData }) {
           locked until <strong style={{ color: "#15803D" }}>Shipped</strong>. OnHand only decrements
           at shipment.
         </p>
+      </div>
+
+      {/* ShipStation status bar */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          marginBottom: 16,
+          padding: "8px 14px",
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 10,
+          fontSize: 12,
+        }}
+      >
+        <span style={{ fontWeight: 700, color: "#0F172A", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          ShipStation
+        </span>
+        <button
+          onClick={doSyncShipments}
+          disabled={ssSyncing || ssPushing}
+          style={{
+            padding: "4px 12px",
+            borderRadius: 6,
+            border: "1px solid #06B6D455",
+            background: ssSyncing ? "#F0F9FF" : "#ECFEFF",
+            color: "#0891B2",
+            fontWeight: 700,
+            fontSize: 11,
+            cursor: ssSyncing ? "default" : "pointer",
+            fontFamily: "inherit",
+            opacity: ssSyncing || ssPushing ? 0.6 : 1,
+          }}
+        >
+          {ssSyncing ? "Syncing..." : "Sync Shipments"}
+        </button>
+        {ssPushing && (
+          <span style={{ color: "#6D28D9", fontWeight: 600, fontSize: 11 }}>
+            Pushing to ShipStation...
+          </span>
+        )}
+        {ssStatus && (
+          <span
+            style={{
+              color: ssStatus.includes("failed") || ssStatus.includes("error") ? "#DC2626" : "#15803D",
+              fontWeight: 600,
+              fontSize: 11,
+            }}
+          >
+            {ssStatus}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 10, color: "#94A3B8" }}>
+          Orders auto-push at Booked
+        </span>
       </div>
 
       {/* Live inventory strip */}
@@ -290,6 +440,24 @@ export default function PipelineView({ data, setData }) {
                       {o.shipment && o.shipment.carrier && (
                         <div style={{ fontSize: 11, color: "#64748B", marginBottom: 5 }}>
                           {o.shipment.carrier} {o.shipment.trackingNum}
+                        </div>
+                      )}
+
+                      {/* ShipStation indicator on booked cards */}
+                      {stage === "booked" && o.shipstationOrderId && (
+                        <div
+                          style={{
+                            background: "#ECFEFF",
+                            border: "1px solid #A5F3FC",
+                            borderRadius: 6,
+                            padding: "3px 8px",
+                            marginBottom: 6,
+                            fontSize: 10,
+                            color: "#0891B2",
+                            fontWeight: 600,
+                          }}
+                        >
+                          SS #{o.shipstationOrderId} -- Awaiting shipment
                         </div>
                       )}
 
@@ -547,25 +715,41 @@ export default function PipelineView({ data, setData }) {
           {/* PICKED -> BOOKED: Reminder callout                             */}
           {/* ============================================================= */}
           {STAGE_NEXT[advModal.fulfillmentStage] === "booked" && (
-            <div
-              style={{
-                background: "#F0F9FF",
-                border: "1px solid #BAE6FD",
-                borderRadius: 10,
-                padding: "10px 14px",
-                marginBottom: 16,
-                fontSize: 12,
-                color: "#0369A1",
-              }}
-            >
-              <strong>Quantities were confirmed at pick.</strong>{" "}
-              {advModal.lines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0)} units
-              filled of {advModal.lines.reduce((s, l) => s + l.qty, 0)} ordered.
-              {advModal.lines.some((l) => (l.qtyBackordered || 0) > 0) && (
-                <span style={{ color: "#DC2626", fontWeight: 700 }}>
-                  {" "}{advModal.lines.reduce((s, l) => s + (l.qtyBackordered || 0), 0)} on backorder.
-                </span>
-              )}
+            <div>
+              <div
+                style={{
+                  background: "#F0F9FF",
+                  border: "1px solid #BAE6FD",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  marginBottom: 12,
+                  fontSize: 12,
+                  color: "#0369A1",
+                }}
+              >
+                <strong>Quantities were confirmed at pick.</strong>{" "}
+                {advModal.lines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0)} units
+                filled of {advModal.lines.reduce((s, l) => s + l.qty, 0)} ordered.
+                {advModal.lines.some((l) => (l.qtyBackordered || 0) > 0) && (
+                  <span style={{ color: "#DC2626", fontWeight: 700 }}>
+                    {" "}{advModal.lines.reduce((s, l) => s + (l.qtyBackordered || 0), 0)} on backorder.
+                  </span>
+                )}
+              </div>
+              <div
+                style={{
+                  background: "#ECFEFF",
+                  border: "1px solid #A5F3FC",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  marginBottom: 16,
+                  fontSize: 12,
+                  color: "#0891B2",
+                }}
+              >
+                This order will be <strong>automatically pushed to ShipStation</strong> for
+                label creation and shipment tracking.
+              </div>
             </div>
           )}
 
