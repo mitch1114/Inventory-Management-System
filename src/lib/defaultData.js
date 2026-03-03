@@ -1,4 +1,19 @@
+// Empty starting state -- used as the fallback when no saved data exists.
+// This prevents demo inventory from overwriting real ShipStation data
+// when localStorage or Supabase is unavailable.
 export const defaultData = {
+  products: [],
+  suppliers: [],
+  salesOrders: [],
+  purchaseOrders: [],
+  customers: [],
+  auditLog: [],
+  counters: { so: 0, po: 0 },
+};
+
+// Full demo catalog for exploring the app before connecting real data.
+// Loaded via Settings > "Load Demo Data".
+export const demoData = {
   products: [
     // -- Spinning Reels
     { id: "p-lx1bx", sku: "LX-1000-S-SLVR-BX", name: "ACC Crappie Legacy X - 1000 Size Spinning Reel (Box)", category: "Spinning Reels", costPrice: 40.67, sellPrice: 79.99, onHand: 60, reorderPoint: 12, reorderQty: 36, supplier: "s1" },

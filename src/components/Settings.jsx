@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { testConnection, testConnectionV2, getWarehouses, pullInventory, pushInventory } from "../lib/shipstation";
-import { BP, BS } from "./ui";
+import { defaultData, demoData } from "../lib/defaultData";
+import { BP, BS, BD } from "./ui";
 
 export default function Settings({ data, setData }) {
   // V1 Shipping
@@ -542,6 +543,7 @@ export default function Settings({ data, setData }) {
           border: "1px solid #E2E8F0",
           borderRadius: 12,
           padding: "20px 24px",
+          marginBottom: 20,
         }}
       >
         <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 12 }}>
@@ -555,6 +557,7 @@ export default function Settings({ data, setData }) {
             fontSize: 12,
             color: "#475569",
             lineHeight: 1.7,
+            marginBottom: 16,
           }}
         >
           <div>
@@ -567,6 +570,29 @@ export default function Settings({ data, setData }) {
             <strong>API keys:</strong> Stored server-side in Vercel environment variables only
             -- never exposed to the browser.
           </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            style={BS}
+            onClick={() => {
+              if (window.confirm("Load demo data? This will overwrite your current inventory, orders, and all other data with sample data for exploring the app.")) {
+                setData(demoData);
+              }
+            }}
+          >
+            Load Demo Data
+          </button>
+          <button
+            style={BD}
+            onClick={() => {
+              if (window.confirm("Clear ALL data? This will remove all products, orders, suppliers, and history. This cannot be undone.")) {
+                setData(defaultData);
+              }
+            }}
+          >
+            Clear All Data
+          </button>
         </div>
       </div>
     </div>

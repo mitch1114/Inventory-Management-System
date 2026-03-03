@@ -15,7 +15,7 @@ import AuditLog from "./components/AuditLog";
 import Settings from "./components/Settings";
 import DemandPlanning from "./components/DemandPlanning";
 import CycleCount from "./components/CycleCount";
-import { defaultData } from "./lib/defaultData";
+import { defaultData, demoData } from "./lib/defaultData";
 
 const TABS = [
   { key: "dashboard", label: "Overview", icon: "\u25A1" },
@@ -262,7 +262,7 @@ export default function App() {
           </div>
           <button
             onClick={() => {
-              if (window.confirm("Reset all data to defaults?")) setData(defaultData);
+              if (window.confirm("Reset all data to demo catalog? This will overwrite your current data.")) setData(demoData);
             }}
             style={{
               fontSize: 11,
