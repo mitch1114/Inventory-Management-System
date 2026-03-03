@@ -1,8 +1,9 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { Html5Qrcode } from "html5-qrcode";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING } from "../lib/constants";
 import { computeInventory, advanceStage } from "../lib/inventory";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
-import { Badge, Modal, Field, IS, BP, BS } from "./ui";
+import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
 
 export default function PipelineView({ data, setData }) {
@@ -12,6 +13,14 @@ export default function PipelineView({ data, setData }) {
   const [ssPushing, setSsPushing] = useState(false); // ShipStation push in progress
   const [ssSyncing, setSsSyncing] = useState(false); // ShipStation sync in progress
   const [ssStatus, setSsStatus] = useState(""); // status message
+  // Pick scanner state
+  const [pickScanning, setPickScanning] = useState(false);
+  const [pickLastScan, setPickLastScan] = useState(null);
+  const [pickScanError, setPickScanError] = useState(null);
+  const [mispicks, setMispicks] = useState([]); // [{ code, timestamp }]
+  const pickScannerRef = useRef(null);
+  const pickScannerDivId = "pick-verify-scanner";
+
   const computedProds = useMemo(
     () => computeInventory(data.products, data.salesOrders),
     [data.products, data.salesOrders],
@@ -20,6 +29,14 @@ export default function PipelineView({ data, setData }) {
     () => Object.fromEntries(data.products.map((p) => [p.id, p])),
     [data.products],
   );
+  const skuToProdId = useMemo(() => {
+    const m = {};
+    data.products.forEach((p) => {
+      m[p.sku.toLowerCase()] = p.id;
+      m[p.sku.toLowerCase().replace(/[-\s]/g, "")] = p.id;
+    });
+    return m;
+  }, [data.products]);
   const stageOrders = useMemo(() => {
     const m = {};
     STAGES.forEach((s) => {
@@ -31,6 +48,103 @@ export default function PipelineView({ data, setData }) {
     return m;
   }, [data.salesOrders]);
   const SCOL = { confirmed: "#3B82F6", picked: "#EAB308", booked: "#06B6D4", shipped: "#10B981" };
+
+  // Cleanup scanner on unmount
+  useEffect(() => {
+    return () => {
+      if (pickScannerRef.current) {
+        pickScannerRef.current.stop().catch(() => {});
+        pickScannerRef.current = null;
+      }
+    };
+  }, []);
+
+  const stopPickScanner = useCallback(async () => {
+    if (pickScannerRef.current) {
+      try { await pickScannerRef.current.stop(); } catch (_) {}
+      pickScannerRef.current = null;
+    }
+    setPickScanning(false);
+  }, []);
+
+  const startPickScanner = useCallback(async () => {
+    setPickScanError(null);
+    setPickScanning(true);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const scanner = new Html5Qrcode(pickScannerDivId);
+    pickScannerRef.current = scanner;
+
+    try {
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 280, height: 100 }, aspectRatio: 2.0 },
+        (decodedText) => {
+          // Look up the scanned barcode
+          const normalized = decodedText.toLowerCase().replace(/[-\s]/g, "");
+          const productId = skuToProdId[decodedText.toLowerCase()] || skuToProdId[normalized];
+
+          if (!productId) {
+            setPickLastScan({ code: decodedText, matched: false, reason: "Unknown product" });
+            setMispicks((prev) => [...prev, { code: decodedText, ts: new Date().toISOString() }]);
+            return;
+          }
+
+          // Check if this product is on the current order
+          setPickQtys((prev) => {
+            const lineIdx = prev.findIndex((l) => l.productId === productId);
+            if (lineIdx === -1) {
+              const prod = prodMap[productId];
+              setPickLastScan({
+                code: decodedText,
+                matched: false,
+                reason: `${prod?.sku || decodedText} is not on this order`,
+              });
+              setMispicks((mp) => [...mp, { code: decodedText, sku: prod?.sku, ts: new Date().toISOString() }]);
+              return prev;
+            }
+
+            const prod = prodMap[productId];
+            // Find the ordered qty for this line from the modal order
+            const orderLine = advModal?.lines[lineIdx];
+            const maxQty = orderLine ? orderLine.qty : Infinity;
+            const current = prev[lineIdx].qtyFilled;
+
+            if (current >= maxQty) {
+              setPickLastScan({
+                code: decodedText,
+                matched: true,
+                warning: true,
+                sku: prod?.sku,
+                name: prod?.name,
+                reason: "Already fully picked",
+              });
+              return prev;
+            }
+
+            setPickLastScan({
+              code: decodedText,
+              matched: true,
+              sku: prod?.sku,
+              name: prod?.name,
+            });
+
+            return prev.map((l, i) =>
+              i === lineIdx ? { ...l, qtyFilled: Math.min(maxQty, l.qtyFilled + 1) } : l,
+            );
+          });
+        },
+        () => {},
+      );
+    } catch (err) {
+      setPickScanError(
+        err.toString().includes("NotAllowedError")
+          ? "Camera access denied. Please allow camera permissions."
+          : "Could not start camera.",
+      );
+      setPickScanning(false);
+    }
+  }, [skuToProdId, prodMap, advModal]);
 
   // Open the advance modal -- initialize pickQtys for confirmed->picked transition
   const openAdvance = (o) => {
@@ -47,15 +161,39 @@ export default function PipelineView({ data, setData }) {
         qtyFilled: l.qtyFilled != null ? l.qtyFilled : l.qty,
       })),
     );
+    // Reset scanner state
+    setPickLastScan(null);
+    setPickScanError(null);
+    setMispicks([]);
   };
 
   const doAdvance = async () => {
     const o = advModal;
     const next = STAGE_NEXT[o.fulfillmentStage];
     if (!next) return;
+    await stopPickScanner();
     // Pass adjusted lines when moving to "picked" (confirmed -> picked)
     const adjusted = next === "picked" ? pickQtys : null;
-    setData((d) => advanceStage(d, o.id, next, next === "shipped" ? shipForm : null, adjusted));
+    setData((d) => {
+      let result = advanceStage(d, o.id, next, next === "shipped" ? shipForm : null, adjusted);
+      // Log mispicks if any occurred during picking
+      if (next === "picked" && mispicks.length > 0) {
+        result = {
+          ...result,
+          auditLog: [
+            ...(result.auditLog || []),
+            {
+              id: uid(),
+              ts: nowIso(),
+              type: "mispick",
+              entity: o.orderNum,
+              description: `${mispicks.length} mispick${mispicks.length !== 1 ? "s" : ""} during picking of ${o.orderNum}: ${mispicks.map((m) => m.sku || m.code).join(", ")}`,
+            },
+          ],
+        };
+      }
+      return result;
+    });
     setAdvModal(null);
 
     // Auto-push to ShipStation when order reaches "booked"
@@ -510,7 +648,7 @@ export default function PipelineView({ data, setData }) {
       {advModal && (
         <Modal
           title={`Advance ${advModal.orderNum}`}
-          onClose={() => setAdvModal(null)}
+          onClose={async () => { await stopPickScanner(); setAdvModal(null); }}
           width={STAGE_NEXT[advModal.fulfillmentStage] === "picked" ? 680 : 480}
         >
           <div
@@ -555,9 +693,149 @@ export default function PipelineView({ data, setData }) {
                   color: "#9A3412",
                 }}
               >
-                <strong>Confirm actual quantities picked.</strong> Adjust the "Qty Filled"
-                below to match what was actually pulled from the warehouse. Any shortfall
-                will be placed on backorder and reflected in your fill rate.
+                <strong>Scan items as you pick them</strong> to verify the right products are pulled,
+                or manually adjust "Qty Filled" below. Any shortfall will be placed on backorder.
+              </div>
+
+              {/* Barcode Scanner for pick verification */}
+              <div
+                style={{
+                  background: "#F8FAFC",
+                  border: "1px solid #E2E8F0",
+                  borderRadius: 10,
+                  padding: 14,
+                  marginBottom: 16,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: pickScanning ? 10 : 0 }}>
+                  <div>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>
+                      Scan to Verify
+                    </span>
+                    <span style={{ fontSize: 11, color: "#64748B", marginLeft: 8 }}>
+                      Scan each item as you pull it from the shelf
+                    </span>
+                  </div>
+                  {!pickScanning ? (
+                    <button
+                      onClick={startPickScanner}
+                      style={{
+                        background: "linear-gradient(135deg,#6D28D9,#4F46E5)",
+                        border: "none",
+                        borderRadius: 8,
+                        padding: "7px 14px",
+                        color: "#fff",
+                        fontWeight: 700,
+                        fontSize: 11,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      Start Scanner
+                    </button>
+                  ) : (
+                    <button
+                      onClick={stopPickScanner}
+                      style={{
+                        background: "#FEF2F2",
+                        border: "1px solid #FECACA",
+                        borderRadius: 8,
+                        padding: "7px 14px",
+                        color: "#DC2626",
+                        fontWeight: 700,
+                        fontSize: 11,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      Stop Scanner
+                    </button>
+                  )}
+                </div>
+
+                {pickScanning && (
+                  <div>
+                    <div
+                      id={pickScannerDivId}
+                      style={{
+                        width: "100%",
+                        maxWidth: 360,
+                        margin: "0 auto",
+                        borderRadius: 8,
+                        overflow: "hidden",
+                      }}
+                    />
+                    <p style={{ fontSize: 10, color: "#94A3B8", textAlign: "center", margin: "6px 0 0" }}>
+                      Each scan adds +1 to that item. Wrong items are flagged as mispicks.
+                    </p>
+                  </div>
+                )}
+
+                {pickScanError && (
+                  <div
+                    style={{
+                      background: "#FEF2F2",
+                      border: "1px solid #FECACA",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      marginTop: 8,
+                      fontSize: 12,
+                      color: "#DC2626",
+                    }}
+                  >
+                    {pickScanError}
+                  </div>
+                )}
+
+                {pickLastScan && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: "7px 12px",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: pickLastScan.matched
+                        ? pickLastScan.warning
+                          ? "#FFFBEB"
+                          : "#F0FDF4"
+                        : "#FEF2F2",
+                      border: pickLastScan.matched
+                        ? pickLastScan.warning
+                          ? "1px solid #FDE68A"
+                          : "1px solid #BBF7D0"
+                        : "1px solid #FECACA",
+                      color: pickLastScan.matched
+                        ? pickLastScan.warning
+                          ? "#92400E"
+                          : "#15803D"
+                        : "#DC2626",
+                    }}
+                  >
+                    {pickLastScan.matched
+                      ? pickLastScan.warning
+                        ? `${pickLastScan.sku} -- ${pickLastScan.reason}`
+                        : `Verified: ${pickLastScan.sku} -- ${pickLastScan.name}`
+                      : `MISPICK: "${pickLastScan.code}"${pickLastScan.reason ? ` (${pickLastScan.reason})` : ""}`}
+                  </div>
+                )}
+
+                {mispicks.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: "7px 12px",
+                      borderRadius: 8,
+                      fontSize: 11,
+                      background: "#FEF2F2",
+                      border: "1px solid #FECACA",
+                      color: "#B91C1C",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {mispicks.length} mispick{mispicks.length !== 1 ? "s" : ""} detected: {mispicks.map((m) => m.sku || m.code).join(", ")}
+                  </div>
+                )}
               </div>
 
               {/* Editable line-item grid */}
@@ -803,7 +1081,7 @@ export default function PipelineView({ data, setData }) {
           )}
 
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-            <button style={BS} onClick={() => setAdvModal(null)}>
+            <button style={BS} onClick={async () => { await stopPickScanner(); setAdvModal(null); }}>
               Cancel
             </button>
             <button style={BP} onClick={doAdvance}>
