@@ -5,6 +5,30 @@ import { computeInventory, advanceStage } from "../lib/inventory";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
+import HelpPanel from "./HelpPanel";
+
+const PICK_VERIFY_HELP = [
+  {
+    heading: "Start the scanner",
+    body: "Click \"Start Scanner\" to open your device camera. Point it at the barcode on each product as you pull it from the shelf. Each successful scan adds +1 to that item's picked quantity.",
+  },
+  {
+    heading: "Mispick detection",
+    body: "If you scan an item that isn't on the order, it's immediately flagged as a mispick with a red alert. Put that item back and grab the correct one. All mispicks are logged in the Audit Log so you can track error rates over time.",
+  },
+  {
+    heading: "Manual adjustments",
+    body: "You can still type quantities directly into the \"Qty Filled\" fields or use the +/- buttons. This is useful for bulk items or cases where scanning isn't practical.",
+  },
+  {
+    heading: "Over-pick warnings",
+    body: "If you scan more units than the order calls for, you'll see a warning. This prevents shipping extra product accidentally.",
+  },
+  {
+    heading: "Confirm and advance",
+    body: "Once all items are picked, click the advance button to move the order to \"Picked & Packed\". Any line where the filled quantity is less than ordered will automatically be placed on backorder.",
+  },
+];
 
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
@@ -691,10 +715,17 @@ export default function PipelineView({ data, setData }) {
                   marginBottom: 16,
                   fontSize: 12,
                   color: "#9A3412",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
                 }}
               >
-                <strong>Scan items as you pick them</strong> to verify the right products are pulled,
-                or manually adjust "Qty Filled" below. Any shortfall will be placed on backorder.
+                <span>
+                  <strong>Scan items as you pick them</strong> to verify the right products are pulled,
+                  or manually adjust "Qty Filled" below. Any shortfall will be placed on backorder.
+                </span>
+                <HelpPanel title="Scan-to-Verify Picking Guide" sections={PICK_VERIFY_HELP} buttonLabel="Help" />
               </div>
 
               {/* Barcode Scanner for pick verification */}

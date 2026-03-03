@@ -2,6 +2,30 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { uid, fmtNum, nowIso, toCSV, dlCSV } from "../lib/utils";
 import { Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BG, BAq } from "./ui";
+import HelpPanel from "./HelpPanel";
+
+const CYCLE_COUNT_HELP = [
+  {
+    heading: "Choose a count scope",
+    body: "Select \"All Products\" or a specific category from the dropdown, then click Start Count. Narrowing by category is great for weekly rotations -- count rods one week, reels the next.",
+  },
+  {
+    heading: "Scan or type counts",
+    body: "Use the barcode scanner (click \"Start Scanner\" to open your camera) to scan each unit on the shelf -- every scan adds +1 to that product. You can also type quantities directly into the number fields or use the +/- buttons.",
+  },
+  {
+    heading: "Quick actions",
+    body: "\"Set All to System Qty\" pre-fills every line with the current system quantity -- useful when most items are correct and you only need to adjust the exceptions. \"Reset All Counts\" clears everything back to uncounted.",
+  },
+  {
+    heading: "Filter and search",
+    body: "Use the filter chips to show only uncounted items or items with variances. The search bar filters by SKU or product name to quickly find specific items.",
+  },
+  {
+    heading: "Review and apply",
+    body: "Click \"Finish Count\" to see a summary of all variances. Review the differences, then click \"Apply Adjustments\" to update system inventory. Each adjustment is logged in the Audit Log with the old and new quantities. You can also export a CSV variance report before applying.",
+  },
+];
 
 // --- Styles --------------------------------------------------------------------
 const headerCell = {
@@ -345,6 +369,7 @@ export default function CycleCount({ data, setData }) {
               Verify shelf inventory against system records
             </p>
           </div>
+          <HelpPanel title="Cycle Count Guide" sections={CYCLE_COUNT_HELP} buttonLabel="How It Works" />
         </div>
 
         {/* Start new count card */}
@@ -588,7 +613,8 @@ export default function CycleCount({ data, setData }) {
             {counted}/{totalItems} counted
           </p>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <HelpPanel title="Cycle Count Guide" sections={CYCLE_COUNT_HELP} buttonLabel="Help" />
           <button style={BD} onClick={discardCount}>
             Discard
           </button>
