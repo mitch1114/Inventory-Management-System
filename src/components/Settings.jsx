@@ -1,7 +1,9 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { testConnection, testConnectionV2, getWarehouses, pullInventory, pushInventory } from "../lib/shipstation";
 import { defaultData, demoData } from "../lib/defaultData";
-import { BP, BS, BD } from "./ui";
+import { uid, nowIso, fmtDate } from "../lib/utils";
+import { connectQbo, fetchInvoices, isQboConnected, getQboTokens, clearQboTokens } from "../lib/qbo";
+import { BP, BS, BD, BG } from "./ui";
 
 export default function Settings({ data, setData }) {
   // V1 Shipping
@@ -17,6 +19,140 @@ export default function Settings({ data, setData }) {
   const [syncDirection, setSyncDirection] = useState(null); // "pull" | "push"
   const [syncResult, setSyncResult] = useState(null);
   const [syncing, setSyncing] = useState(false);
+
+  // QBO state
+  const [qboConnected, setQboConnected] = useState(isQboConnected());
+  const [qboConnecting, setQboConnecting] = useState(false);
+  const [qboError, setQboError] = useState(null);
+  const [qboInvoices, setQboInvoices] = useState(null);
+  const [qboFetching, setQboFetching] = useState(false);
+  const [qboImportResult, setQboImportResult] = useState(null);
+  const [qboStartDate, setQboStartDate] = useState("");
+
+  // Re-check connection status on mount (tokens may have been cleared)
+  useEffect(() => {
+    setQboConnected(isQboConnected());
+  }, []);
+
+  const doConnectQbo = async () => {
+    setQboConnecting(true);
+    setQboError(null);
+    try {
+      await connectQbo();
+      setQboConnected(true);
+    } catch (err) {
+      setQboError(err.message);
+    }
+    setQboConnecting(false);
+  };
+
+  const doDisconnectQbo = () => {
+    if (!window.confirm("Disconnect from QuickBooks Online? You can reconnect anytime.")) return;
+    clearQboTokens();
+    setQboConnected(false);
+    setQboInvoices(null);
+    setQboImportResult(null);
+  };
+
+  const doFetchInvoices = async () => {
+    setQboFetching(true);
+    setQboError(null);
+    setQboImportResult(null);
+    try {
+      const result = await fetchInvoices({
+        startDate: qboStartDate || undefined,
+        maxResults: 100,
+      });
+      setQboInvoices(result.salesOrders || []);
+    } catch (err) {
+      setQboError(err.message);
+      // If auth expired, update connection status
+      if (!isQboConnected()) setQboConnected(false);
+    }
+    setQboFetching(false);
+  };
+
+  const doImportInvoices = () => {
+    if (!qboInvoices || qboInvoices.length === 0) return;
+
+    const existingQboIds = new Set(
+      data.salesOrders.filter((o) => o.qboId).map((o) => o.qboId),
+    );
+
+    let added = 0;
+    let skipped = 0;
+    const newOrders = [];
+
+    for (const inv of qboInvoices) {
+      if (existingQboIds.has(inv.qboId)) {
+        skipped++;
+        continue;
+      }
+
+      // Match invoice line items to our products by name
+      const mappedLines = inv.lines.map((l) => {
+        const match = data.products.find(
+          (p) =>
+            p.name === l.qboItemName ||
+            p.sku === l.qboItemName ||
+            p.name.toLowerCase() === (l.qboItemName || "").toLowerCase(),
+        );
+        return {
+          productId: match ? match.id : null,
+          qty: l.qty,
+          price: l.price,
+          qtyFilled: 0,
+          qtyBackordered: 0,
+          qboItemName: l.qboItemName,
+        };
+      });
+
+      // Also try to match customer
+      const customerMatch = data.customers.find(
+        (c) => c.name.toLowerCase() === (inv.customer || "").toLowerCase(),
+      );
+
+      newOrders.push({
+        id: uid(),
+        orderNum: `QBO-${inv.qboDocNumber || inv.qboId}`,
+        qboId: inv.qboId,
+        qboDocNumber: inv.qboDocNumber,
+        customer: inv.customer || "Unknown",
+        date: inv.date,
+        fulfillmentStage: "confirmed",
+        type: "standard",
+        dealerPORef: inv.qboDocNumber ? `INV-${inv.qboDocNumber}` : "",
+        lines: mappedLines,
+        shipment: {},
+        notes: `Imported from QBO invoice #${inv.qboDocNumber || inv.qboId}`,
+      });
+      added++;
+    }
+
+    if (added > 0) {
+      setData((d) => ({
+        ...d,
+        salesOrders: [...d.salesOrders, ...newOrders],
+        counters: { ...d.counters, so: (d.counters?.so || 0) + added },
+        auditLog: [
+          ...(d.auditLog || []),
+          {
+            id: uid(),
+            ts: nowIso(),
+            type: "adjustment",
+            entity: "QBO Import",
+            description: `Imported ${added} invoice(s) from QuickBooks Online as sales orders${skipped > 0 ? ` (${skipped} already imported)` : ""}`,
+          },
+        ],
+      }));
+    }
+
+    setQboImportResult({
+      success: true,
+      message: `${added} invoice(s) imported as sales orders${skipped > 0 ? `, ${skipped} skipped (already imported)` : ""}`,
+    });
+    setQboInvoices(null);
+  };
 
   const doTestConnection = async () => {
     setSsTesting(true);
@@ -532,6 +668,309 @@ export default function Settings({ data, setData }) {
                 {syncResult.message || syncResult.error || "Done"}
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* QuickBooks Online Integration */}
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 12,
+          padding: "20px 24px",
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: "#F0FDF4",
+              border: "1px solid #BBF7D0",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 14,
+              fontWeight: 800,
+              color: "#15803D",
+            }}
+          >
+            QB
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A" }}>
+              QuickBooks Online
+            </div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>Import invoices as sales orders</div>
+          </div>
+          {qboConnected && (
+            <div
+              style={{
+                marginLeft: "auto",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 12px",
+                borderRadius: 20,
+                background: "#F0FDF4",
+                border: "1px solid #BBF7D0",
+                fontSize: 11,
+                fontWeight: 700,
+                color: "#15803D",
+              }}
+            >
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#16A34A" }} />
+              Connected
+            </div>
+          )}
+        </div>
+
+        {/* Setup guide */}
+        <div
+          style={{
+            background: "#F8FAFC",
+            borderRadius: 10,
+            padding: "14px 18px",
+            marginBottom: 18,
+            fontSize: 12,
+            color: "#475569",
+            lineHeight: 1.7,
+          }}
+        >
+          <div style={{ fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>Setup guide:</div>
+          <ol style={{ margin: 0, paddingLeft: 18 }}>
+            <li>
+              Go to the{" "}
+              <strong>Intuit Developer Portal</strong> and create an app (choose &ldquo;QuickBooks Online and Payments&rdquo;).
+            </li>
+            <li>
+              Under your app&rsquo;s <strong>Keys & credentials</strong> (Production or Sandbox), copy the{" "}
+              <strong>Client ID</strong> and <strong>Client Secret</strong>.
+            </li>
+            <li>
+              Add a <strong>Redirect URI</strong> in the Intuit portal:{" "}
+              <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>
+                https://your-domain.vercel.app/api/qbo/callback
+              </code>
+            </li>
+            <li>
+              Add both <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>INTUIT_CLIENT_ID</code>{" "}
+              and <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>INTUIT_CLIENT_SECRET</code>{" "}
+              to your Vercel environment variables.
+            </li>
+            <li>
+              Click <strong>Connect to QuickBooks</strong> below to authorize.
+            </li>
+          </ol>
+        </div>
+
+        {/* Environment variables */}
+        <div
+          style={{
+            background: "#FFFFFF",
+            border: "1px solid #E2E8F0",
+            borderRadius: 10,
+            padding: "14px 18px",
+            marginBottom: 18,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 8 }}>
+            Vercel Environment Variables
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <tbody>
+              <tr style={{ borderBottom: "1px solid #F1F5F9" }}>
+                <td style={{ padding: "8px 0", fontFamily: "monospace", fontWeight: 600, color: "#15803D" }}>
+                  INTUIT_CLIENT_ID
+                </td>
+                <td style={{ padding: "8px 0", color: "#64748B" }}>
+                  <strong>Required.</strong> Your Intuit app Client ID
+                </td>
+              </tr>
+              <tr>
+                <td style={{ padding: "8px 0", fontFamily: "monospace", fontWeight: 600, color: "#15803D" }}>
+                  INTUIT_CLIENT_SECRET
+                </td>
+                <td style={{ padding: "8px 0", color: "#64748B" }}>
+                  <strong>Required.</strong> Your Intuit app Client Secret
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* Connect / Disconnect buttons */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: qboError || qboImportResult ? 14 : 0 }}>
+          {!qboConnected ? (
+            <button
+              style={{ ...BG, opacity: qboConnecting ? 0.6 : 1 }}
+              onClick={doConnectQbo}
+              disabled={qboConnecting}
+            >
+              {qboConnecting ? "Connecting..." : "Connect to QuickBooks"}
+            </button>
+          ) : (
+            <>
+              <button
+                style={{ ...BG, opacity: qboFetching ? 0.6 : 1 }}
+                onClick={doFetchInvoices}
+                disabled={qboFetching}
+              >
+                {qboFetching ? "Fetching..." : "Fetch Invoices"}
+              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <label style={{ fontSize: 11, color: "#64748B", fontWeight: 600 }}>From:</label>
+                <input
+                  type="date"
+                  value={qboStartDate}
+                  onChange={(e) => setQboStartDate(e.target.value)}
+                  style={{
+                    background: "#FFFFFF",
+                    border: "1px solid #CBD5E1",
+                    borderRadius: 6,
+                    padding: "5px 8px",
+                    fontSize: 12,
+                    color: "#0F172A",
+                    fontFamily: "inherit",
+                  }}
+                />
+              </div>
+              <button
+                style={{ ...BD, padding: "7px 14px", fontSize: 12 }}
+                onClick={doDisconnectQbo}
+              >
+                Disconnect
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Error display */}
+        {qboError && (
+          <div
+            style={{
+              padding: "8px 14px",
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              background: "#FEF2F2",
+              color: "#B91C1C",
+              border: "1px solid #FECACA",
+              marginBottom: 14,
+            }}
+          >
+            {qboError}
+          </div>
+        )}
+
+        {/* Import result banner */}
+        {qboImportResult && (
+          <div
+            style={{
+              padding: "8px 14px",
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              background: qboImportResult.success ? "#F0FDF4" : "#FEF2F2",
+              color: qboImportResult.success ? "#15803D" : "#B91C1C",
+              border: `1px solid ${qboImportResult.success ? "#BBF7D0" : "#FECACA"}`,
+              marginBottom: 14,
+            }}
+          >
+            {qboImportResult.message}
+          </div>
+        )}
+
+        {/* Invoice preview table */}
+        {qboInvoices && qboInvoices.length > 0 && (
+          <div
+            style={{
+              background: "#F8FAFC",
+              border: "1px solid #E2E8F0",
+              borderRadius: 10,
+              padding: "16px 18px",
+              marginTop: 14,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>
+                {qboInvoices.length} Invoice{qboInvoices.length !== 1 ? "s" : ""} Found
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={BS} onClick={() => setQboInvoices(null)}>
+                  Cancel
+                </button>
+                <button style={BG} onClick={doImportInvoices}>
+                  Import as Sales Orders
+                </button>
+              </div>
+            </div>
+
+            <div style={{ maxHeight: 300, overflow: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#EFF6FF" }}>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Invoice #</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Customer</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Date</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Amount</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Status</th>
+                    <th style={{ padding: "8px 10px", textAlign: "center", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Lines</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {qboInvoices.map((inv, i) => {
+                    const already = data.salesOrders.some((o) => o.qboId === inv.qboId);
+                    return (
+                      <tr key={inv.qboId} style={{ borderBottom: "1px solid #F1F5F9", background: already ? "#FEF9C3" : i % 2 === 0 ? "transparent" : "#FAFAFA" }}>
+                        <td style={{ padding: "8px 10px", fontWeight: 600 }}>{inv.qboDocNumber || inv.qboId}</td>
+                        <td style={{ padding: "8px 10px" }}>{inv.customer}</td>
+                        <td style={{ padding: "8px 10px", color: "#64748B" }}>{fmtDate(inv.date)}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", fontWeight: 600, color: "#15803D" }}>
+                          ${inv.totalAmount.toFixed(2)}
+                        </td>
+                        <td style={{ padding: "8px 10px" }}>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              padding: "2px 8px",
+                              borderRadius: 10,
+                              background: inv.status === "paid" ? "#F0FDF4" : inv.status === "overdue" ? "#FEF2F2" : "#EFF6FF",
+                              color: inv.status === "paid" ? "#15803D" : inv.status === "overdue" ? "#DC2626" : "#2563EB",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {already ? "ALREADY IMPORTED" : inv.status}
+                          </span>
+                        </td>
+                        <td style={{ padding: "8px 10px", textAlign: "center", color: "#64748B" }}>{inv.lines.length}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {qboInvoices && qboInvoices.length === 0 && (
+          <div
+            style={{
+              padding: "14px 18px",
+              borderRadius: 10,
+              background: "#F8FAFC",
+              border: "1px solid #E2E8F0",
+              fontSize: 13,
+              color: "#64748B",
+              textAlign: "center",
+              marginTop: 14,
+            }}
+          >
+            No invoices found{qboStartDate ? ` since ${fmtDate(qboStartDate)}` : ""}. Try adjusting the date range.
           </div>
         )}
       </div>
