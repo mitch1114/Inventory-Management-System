@@ -3,6 +3,15 @@ import { uid, fmt, fmtNum, nowIso, toCSV, dlCSV, parseCSV } from "../lib/utils";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq } from "./ui";
 
 // --- Helpers -----------------------------------------------------------------
+const CUSTOMER_TYPES = [
+  { value: "dealer", label: "Dealer" },
+  { value: "distributor-t1", label: "Tier 1 Distributor" },
+  { value: "distributor-t2", label: "Tier 2 Distributor" },
+  { value: "buying-group", label: "Buying Group" },
+  { value: "retailer", label: "Retailer" },
+];
+const TYPE_LABEL = Object.fromEntries(CUSTOMER_TYPES.map((t) => [t.value, t.label]));
+
 const blank = () => ({
   name: "",
   type: "dealer",
@@ -197,7 +206,7 @@ export default function Customers({ data, setData }) {
         }
 
         const type = typeCol ? (row[typeCol] || "").trim().toLowerCase() : "";
-        const validTypes = ["dealer", "distributor", "retailer"];
+        const validTypes = CUSTOMER_TYPES.map((t) => t.value);
         const resolvedType = validTypes.includes(type) ? type : "dealer";
 
         const email = emailCol ? (row[emailCol] || "").trim() : "";
@@ -342,7 +351,7 @@ export default function Customers({ data, setData }) {
                 <span style={{ fontWeight: 600, color: "#0F172A" }}>{c.name}</span>
               </TD>
               <TD>
-                <Badge status={c.type || "dealer"} label={c.type || "dealer"} />
+                <Badge status={c.type || "dealer"} label={TYPE_LABEL[c.type] || c.type || "Dealer"} />
               </TD>
               <TD>
                 <span style={{ color: "#6D28D9", fontSize: 12 }}>{c.email || "--"}</span>
@@ -399,9 +408,11 @@ export default function Customers({ data, setData }) {
               value={form.type}
               onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
             >
-              <option value="dealer">Dealer</option>
-              <option value="distributor">Distributor</option>
-              <option value="retailer">Retailer</option>
+              {CUSTOMER_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
             </select>
           </Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
