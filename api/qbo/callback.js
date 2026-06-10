@@ -10,11 +10,25 @@ export default async function handler(req, res) {
   const { code, realmId, state, error } = req.query;
 
   if (error) {
-    return res.status(200).send(resultPage({ error: `Authorization denied: ${error}` }));
+    return res.status(200).send(resultPage({ error: "Authorization was denied." }, req));
   }
 
   if (!code || !realmId) {
-    return res.status(200).send(resultPage({ error: "Missing authorization code or realm ID." }));
+    return res.status(200).send(resultPage({ error: "Missing authorization code or realm ID." }, req));
+  }
+
+  // Validate state token (CSRF prevention)
+  if (!state) {
+    return res.status(200).send(resultPage({ error: "Missing state parameter." }, req));
+  }
+  try {
+    const decoded = JSON.parse(Buffer.from(state, "base64url").toString());
+    const age = Date.now() - (decoded.ts || 0);
+    if (age > 10 * 60 * 1000 || age < 0) {
+      return res.status(200).send(resultPage({ error: "Authorization expired. Please try again." }, req));
+    }
+  } catch {
+    return res.status(200).send(resultPage({ error: "Invalid state parameter." }, req));
   }
 
   const clientId = process.env.INTUIT_CLIENT_ID;
@@ -22,7 +36,7 @@ export default async function handler(req, res) {
   if (!clientId || !clientSecret) {
     return res
       .status(200)
-      .send(resultPage({ error: "Server missing INTUIT_CLIENT_ID or INTUIT_CLIENT_SECRET." }));
+      .send(resultPage({ error: "Server missing INTUIT_CLIENT_ID or INTUIT_CLIENT_SECRET." }, req));
   }
 
   // Build redirect URI (must match exactly what was sent in /auth)
@@ -49,14 +63,13 @@ export default async function handler(req, res) {
     });
 
     if (!tokenRes.ok) {
-      const errBody = await tokenRes.text();
+      console.error(`QBO token exchange failed: ${tokenRes.status}`);
       return res
         .status(200)
-        .send(resultPage({ error: `Token exchange failed (${tokenRes.status}): ${errBody}` }));
+        .send(resultPage({ error: "Token exchange failed. Please try again." }, req));
     }
 
     const tokens = await tokenRes.json();
-    // Send tokens back to the opener window
     return res.status(200).send(
       resultPage({
         success: true,
@@ -68,17 +81,19 @@ export default async function handler(req, res) {
           tokenType: tokens.token_type,
           issuedAt: Date.now(),
         },
-      }),
+      }, req),
     );
   } catch (err) {
-    return res.status(200).send(resultPage({ error: `Token exchange error: ${err.message}` }));
+    console.error("QBO token exchange error:", err.message);
+    return res.status(200).send(resultPage({ error: "Token exchange error. Please try again." }, req));
   }
 }
 
-// Returns an HTML page that sends the result to the opener window via postMessage,
-// then closes itself. This is the standard pattern for popup-based OAuth.
-function resultPage(result) {
-  const payload = JSON.stringify(result);
+function resultPage(result, req) {
+  const proto = req.headers["x-forwarded-proto"] || "https";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const origin = `${proto}://${host}`;
+  const safePayload = JSON.stringify(result).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
   return `<!DOCTYPE html>
 <html>
 <head><title>QuickBooks Connected</title></head>
@@ -86,7 +101,7 @@ function resultPage(result) {
 <p>${result.error ? "Connection failed. You can close this window." : "Connected! This window will close automatically."}</p>
 <script>
   if (window.opener) {
-    window.opener.postMessage({ type: "qbo-auth", payload: ${payload} }, "*");
+    window.opener.postMessage({ type: "qbo-auth", payload: ${safePayload} }, ${JSON.stringify(origin)});
     setTimeout(function() { window.close(); }, 1500);
   }
 </script>

@@ -34,9 +34,9 @@ export default async function handler(req, res) {
     });
 
     if (!tokenRes.ok) {
-      const errBody = await tokenRes.text();
+      console.error(`QBO token refresh failed: ${tokenRes.status}`);
       return res.status(tokenRes.status).json({
-        error: `Token refresh failed (${tokenRes.status}): ${errBody}`,
+        error: `Token refresh failed (${tokenRes.status}). Please reconnect to QuickBooks.`,
       });
     }
 
@@ -49,6 +49,7 @@ export default async function handler(req, res) {
       issuedAt: Date.now(),
     });
   } catch (err) {
-    return res.status(500).json({ error: `Token refresh error: ${err.message}` });
+    console.error("QBO token refresh error:", err.message);
+    return res.status(500).json({ error: "Token refresh error. Please try again." });
   }
 }

@@ -7,9 +7,9 @@ import { uid, nowIso } from "./utils";
 export function computeInventory(products, salesOrders) {
   const locked = {};
   const bord = {};
-  salesOrders.forEach((o) => {
+  (salesOrders || []).forEach((o) => {
     if (!LOCKING.has(o.fulfillmentStage)) return;
-    o.lines.forEach((l) => {
+    (o.lines || []).forEach((l) => {
       const filled = l.qtyFilled != null ? l.qtyFilled : l.qty;
       if (filled > 0) locked[l.productId] = (locked[l.productId] || 0) + filled;
       const bo = l.qtyBackordered != null ? l.qtyBackordered : 0;

@@ -3,8 +3,14 @@
 // sales order format. Requires accessToken and realmId in the request body.
 
 const QBO_BASE = "https://quickbooks.api.intuit.com";
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default async function handler(req, res) {
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    return res.status(200).end();
+  }
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const { accessToken, realmId, startDate, maxResults } = req.body || {};
@@ -13,14 +19,18 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing accessToken or realmId." });
   }
 
-  // Build query -- fetch recent invoices, optionally from a start date
+  // Validate startDate format to prevent query injection
+  if (startDate && !DATE_RE.test(startDate)) {
+    return res.status(400).json({ error: "Invalid startDate format. Use YYYY-MM-DD." });
+  }
+
   const limit = Math.min(maxResults || 100, 1000);
   let query = `SELECT * FROM Invoice ORDERBY TxnDate DESC MAXRESULTS ${limit}`;
   if (startDate) {
     query = `SELECT * FROM Invoice WHERE TxnDate >= '${startDate}' ORDERBY TxnDate DESC MAXRESULTS ${limit}`;
   }
 
-  const url = `${QBO_BASE}/v3/company/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=73`;
+  const url = `${QBO_BASE}/v3/company/${encodeURIComponent(realmId)}/query?query=${encodeURIComponent(query)}&minorversion=73`;
 
   try {
     const qbRes = await fetch(url, {
@@ -31,16 +41,15 @@ export default async function handler(req, res) {
     });
 
     if (!qbRes.ok) {
-      const errBody = await qbRes.text();
+      console.error(`QBO query failed: ${qbRes.status}`);
       return res.status(qbRes.status).json({
-        error: `QBO query failed (${qbRes.status}): ${errBody}`,
+        error: `Invoice fetch failed (${qbRes.status}). Check your QuickBooks connection.`,
       });
     }
 
     const body = await qbRes.json();
     const invoices = body?.QueryResponse?.Invoice || [];
 
-    // Map QBO invoices to our sales order format
     const salesOrders = invoices.map((inv) => mapInvoice(inv));
 
     return res.status(200).json({
@@ -49,18 +58,18 @@ export default async function handler(req, res) {
       salesOrders,
     });
   } catch (err) {
-    return res.status(500).json({ error: `Invoice fetch error: ${err.message}` });
+    console.error("QBO invoice fetch error:", err.message);
+    return res.status(500).json({ error: "Invoice fetch error. Please try again." });
   }
 }
 
-// Map a QBO Invoice object to our sales order shape
 function mapInvoice(inv) {
   const lines = (inv.Line || [])
     .filter((l) => l.DetailType === "SalesItemLineDetail" && l.SalesItemLineDetail)
     .map((l) => {
       const detail = l.SalesItemLineDetail;
       return {
-        productId: null, // Will be matched client-side by name/SKU
+        productId: null,
         qboItemRef: detail.ItemRef ? detail.ItemRef.value : null,
         qboItemName: detail.ItemRef ? detail.ItemRef.name : "",
         qty: detail.Qty || 0,

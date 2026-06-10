@@ -1,5 +1,8 @@
 // --- Utility helpers ----------------------------------------------------------
-export const uid = () => Math.random().toString(36).slice(2, 10);
+export const uid = () =>
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+    : Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
 export const fmt = (n) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 export const fmtNum = (n) => new Intl.NumberFormat("en-US").format(n || 0);

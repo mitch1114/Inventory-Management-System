@@ -11,9 +11,9 @@ export default function Dashboard({ data }) {
   );
   const { salesOrders, auditLog } = data;
   const pipeline = useMemo(() => {
-    const r = {};
-    STAGES.forEach((s) => {
-      r[s] = salesOrders.filter((o) => o.fulfillmentStage === s).length;
+    const r = Object.fromEntries(STAGES.map((s) => [s, 0]));
+    salesOrders.forEach((o) => {
+      if (r[o.fulfillmentStage] != null) r[o.fulfillmentStage]++;
     });
     return r;
   }, [salesOrders]);
@@ -126,7 +126,7 @@ export default function Dashboard({ data }) {
         />
         <Stat
           label="Active in Pipeline"
-          value={pipeline.confirmed + (pipeline.picked || 0) + (pipeline.booked || 0)}
+          value={(pipeline.confirmed || 0) + (pipeline.picked || 0) + (pipeline.booked || 0)}
           sub="confirmed+picked+booked"
           accent="#3B82F6"
         />

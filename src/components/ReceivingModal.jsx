@@ -65,7 +65,7 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
         productId: l.productId,
         expectedQty: l.qty,
         cost: l.cost,
-        receivedQty: l.qty, // default to expected
+        receivedQty: 0,
         reason: "",
       })),
   );

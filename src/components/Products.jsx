@@ -652,9 +652,9 @@ export default function Products({ data, setData }) {
             ...newProducts[idx],
             name: name || newProducts[idx].name,
             category: category || newProducts[idx].category,
-            costPrice: costPrice || newProducts[idx].costPrice,
-            sellPrice: sellPrice || newProducts[idx].sellPrice,
-            onHand: onHand || newProducts[idx].onHand,
+            costPrice: costPrice != null && costPrice !== "" ? costPrice : newProducts[idx].costPrice,
+            sellPrice: sellPrice != null && sellPrice !== "" ? sellPrice : newProducts[idx].sellPrice,
+            onHand: onHand != null && onHand !== "" ? onHand : newProducts[idx].onHand,
             reorderPoint: reorderPoint || newProducts[idx].reorderPoint,
             reorderQty: reorderQty || newProducts[idx].reorderQty,
           };

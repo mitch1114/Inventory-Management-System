@@ -3,7 +3,7 @@
 // Requires ANTHROPIC_API_KEY environment variable.
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const _origin = req.headers.origin || ""; res.setHeader("Access-Control-Allow-Origin", _origin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
