@@ -975,17 +975,15 @@ export default function SalesOrders({ data, setData }) {
         empty={filtered.length === 0 ? "No sales orders match your filters." : null}
       >
         {filtered.map((o, i) => {
-          const units = o.lines.reduce(
-            (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty),
+          // Show ordered totals here (not filled) so fully-backordered orders
+          // like pre-orders don't read as "0 units / $0.00" in the list.
+          const units = o.lines.reduce((s, l) => s + l.qty, 0);
+          const value = o.lines.reduce((s, l) => s + l.qty * l.price, 0);
+          const boUnits = o.lines.reduce(
+            (s, l) => s + (l.qtyBackordered != null ? l.qtyBackordered : 0),
             0,
           );
-          const value = o.lines.reduce(
-            (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty) * l.price,
-            0,
-          );
-          const hasBO = o.lines.some(
-            (l) => (l.qtyBackordered != null ? l.qtyBackordered : 0) > 0,
-          );
+          const hasBO = boUnits > 0;
           return (
             <TR
               key={o.id}
@@ -1067,6 +1065,11 @@ export default function SalesOrders({ data, setData }) {
               <TD>
                 {o.lines.length} item{o.lines.length !== 1 ? "s" : ""} &middot;{" "}
                 {fmtNum(units)} units
+                {hasBO && (
+                  <span style={{ color: "#F97316", fontWeight: 600 }}>
+                    {" "}({fmtNum(boUnits)} BO)
+                  </span>
+                )}
               </TD>
               <TD mono>{fmt(value)}</TD>
               <TD>

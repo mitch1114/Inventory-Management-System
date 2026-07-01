@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { testConnection, testConnectionV2, getWarehouses, pullInventory, pushInventory } from "../lib/shipstation";
-import { defaultData, demoData } from "../lib/defaultData";
+import { defaultData, makeDemoData } from "../lib/defaultData";
 import { uid, nowIso, fmtDate } from "../lib/utils";
 import { connectQbo, fetchInvoices, isQboConnected, getQboTokens, clearQboTokens } from "../lib/qbo";
 import { BP, BS, BD, BG } from "./ui";
@@ -1016,7 +1016,7 @@ export default function Settings({ data, setData }) {
             style={BS}
             onClick={() => {
               if (window.confirm("Load demo data? This will overwrite your current inventory, orders, and all other data with sample data for exploring the app.")) {
-                setData(demoData);
+                setData(makeDemoData());
               }
             }}
           >

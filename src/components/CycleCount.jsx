@@ -81,6 +81,12 @@ export default function CycleCount({ data, setData }) {
   const [scanError, setScanError] = useState(null);
   const scannerRef = useRef(null);
   const scannerDivId = "cycle-count-scanner";
+  // The html5-qrcode success callback is registered once at scanner start, so it
+  // would capture a stale handleBarcodeScan (and stale count lines). Route every
+  // scan through this ref, which is refreshed each render with the latest handler.
+  const scanHandlerRef = useRef(null);
+  // Debounce repeat reads: the camera fires ~10x/sec while a barcode is in frame.
+  const lastReadRef = useRef({ code: null, ts: 0 });
 
   // Review state (after count is complete)
   const [reviewing, setReviewing] = useState(false);
@@ -158,7 +164,13 @@ export default function CycleCount({ data, setData }) {
       await scanner.start(
         { facingMode: "environment" },
         { fps: 10, qrbox: { width: 280, height: 100 }, aspectRatio: 2.0 },
-        (decodedText) => handleBarcodeScan(decodedText),
+        (decodedText) => {
+          const now = Date.now();
+          const last = lastReadRef.current;
+          if (decodedText === last.code && now - last.ts < 1500) return;
+          lastReadRef.current = { code: decodedText, ts: now };
+          if (scanHandlerRef.current) scanHandlerRef.current(decodedText);
+        },
         () => {},
       );
     } catch (err) {
@@ -213,6 +225,11 @@ export default function CycleCount({ data, setData }) {
     },
     [lines, skuMap, prodMap],
   );
+
+  // Keep the scanner callback pointed at the latest handler (fresh `lines` closure).
+  useEffect(() => {
+    scanHandlerRef.current = handleBarcodeScan;
+  }, [handleBarcodeScan]);
 
   // --- Line helpers ------------------------------------------------------------
   const setLineQty = (idx, val) =>
