@@ -11,15 +11,36 @@ export default function Dashboard({ data }) {
   );
   const { salesOrders, auditLog } = data;
   const pipeline = useMemo(() => {
-    const r = {};
-    STAGES.forEach((s) => {
-      r[s] = salesOrders.filter((o) => o.fulfillmentStage === s).length;
+    const r = Object.fromEntries(STAGES.map((s) => [s, 0]));
+    salesOrders.forEach((o) => {
+      if (r[o.fulfillmentStage] != null) r[o.fulfillmentStage]++;
     });
     return r;
   }, [salesOrders]);
   const totalLocked = computedProds.reduce((s, p) => s + p.locked * p.costPrice, 0);
   const totalAvail = computedProds.reduce((s, p) => s + p.available * p.costPrice, 0);
   const totalBO = computedProds.reduce((s, p) => s + p.backordered, 0);
+
+  // Fill rate & revenue lost -- across all active (locking) orders
+  const fillStats = useMemo(() => {
+    let totalOrdered = 0;
+    let totalFilled = 0;
+    let revenueLost = 0;
+    const prodMap = Object.fromEntries(data.products.map((p) => [p.id, p]));
+    salesOrders.forEach((o) => {
+      if (!LOCKING.has(o.fulfillmentStage)) return;
+      o.lines.forEach((l) => {
+        totalOrdered += l.qty;
+        totalFilled += l.qtyFilled != null ? l.qtyFilled : l.qty;
+        const bo = l.qtyBackordered != null ? l.qtyBackordered : 0;
+        if (bo > 0) {
+          revenueLost += bo * l.price;
+        }
+      });
+    });
+    const fillRate = totalOrdered > 0 ? (totalFilled / totalOrdered) * 100 : 100;
+    return { fillRate, revenueLost, totalOrdered, totalFilled };
+  }, [salesOrders, data.products]);
   const revenue = salesOrders
     .filter((o) => o.fulfillmentStage === "shipped")
     .reduce(
@@ -90,8 +111,22 @@ export default function Dashboard({ data }) {
         <Stat label="Locked in Pipeline" value={fmt(totalLocked)} sub="confirmed->booked" accent="#EAB308" warn />
         <Stat label="Backordered Units" value={fmtNum(totalBO)} accent="#F97316" warn={totalBO > 0} />
         <Stat
+          label="Fill Rate"
+          value={`${fillStats.fillRate.toFixed(1)}%`}
+          sub={`${fmtNum(fillStats.totalFilled)} of ${fmtNum(fillStats.totalOrdered)} units`}
+          accent={fillStats.fillRate >= 95 ? "#10B981" : fillStats.fillRate >= 80 ? "#EAB308" : "#EF4444"}
+          warn={fillStats.fillRate < 95}
+        />
+        <Stat
+          label="Revenue at Risk"
+          value={fmt(fillStats.revenueLost)}
+          sub="unfilled backorders"
+          accent="#EF4444"
+          warn={fillStats.revenueLost > 0}
+        />
+        <Stat
           label="Active in Pipeline"
-          value={pipeline.confirmed + (pipeline.picked || 0) + (pipeline.booked || 0)}
+          value={(pipeline.confirmed || 0) + (pipeline.picked || 0) + (pipeline.booked || 0)}
           sub="confirmed+picked+booked"
           accent="#3B82F6"
         />
@@ -107,13 +142,17 @@ export default function Dashboard({ data }) {
           marginBottom: 16,
         }}
       >
-        <div style={{ fontWeight: 700, color: "#334155", marginBottom: 12, fontSize: 13 }}>
-          Pipeline Status
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: "#334155", fontSize: 13 }}>
+            Pipeline Status
+          </div>
+          <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600 }}>Last 7 Days</div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
           {STAGES.map((s) => {
             const col = { confirmed: "#3B82F6", picked: "#EAB308", booked: "#06B6D4", shipped: "#10B981" }[s];
-            const orders = salesOrders.filter((o) => o.fulfillmentStage === s);
+            const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+            const orders = salesOrders.filter((o) => o.fulfillmentStage === s && o.date >= cutoff);
             const units = orders.reduce(
               (sum, o) =>
                 sum + o.lines.reduce((ls, l) => ls + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0),

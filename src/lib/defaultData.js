@@ -1,4 +1,19 @@
+// Empty starting state -- used as the fallback when no saved data exists.
+// This prevents demo inventory from overwriting real ShipStation data
+// when localStorage or Supabase is unavailable.
 export const defaultData = {
+  products: [],
+  suppliers: [],
+  salesOrders: [],
+  purchaseOrders: [],
+  customers: [],
+  auditLog: [],
+  counters: { so: 0, po: 0 },
+};
+
+// Full demo catalog for exploring the app before connecting real data.
+// Loaded via Settings > "Load Demo Data".
+export const demoData = {
   products: [
     // -- Spinning Reels
     { id: "p-lx1bx", sku: "LX-1000-S-SLVR-BX", name: "ACC Crappie Legacy X - 1000 Size Spinning Reel (Box)", category: "Spinning Reels", costPrice: 40.67, sellPrice: 79.99, onHand: 60, reorderPoint: 12, reorderQty: 36, supplier: "s1" },
@@ -60,6 +75,9 @@ export const defaultData = {
   suppliers: [
     { id: "s1", name: "Far East Rods Co.", contact: "David Lin", email: "david@ferods.com", phone: "555-8801", leadDays: 45 },
     { id: "s2", name: "Tackle Components Inc.", contact: "Mike Russo", email: "mike@tackleci.com", phone: "555-8802", leadDays: 21 },
+    { id: "s3", name: "Pokee Fishing Tackle Co., Ltd.", contact: "", email: "", phone: "", leadDays: 60 },
+    { id: "s4", name: "Fishing Capital Company Limited", contact: "", email: "", phone: "", leadDays: 45 },
+    { id: "s5", name: "Tech Angler Company Limited", contact: "", email: "", phone: "", leadDays: 45 },
   ],
   salesOrders: [
     {

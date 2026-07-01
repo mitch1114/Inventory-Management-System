@@ -3,6 +3,8 @@ import { LOCKING } from "./lib/constants";
 import { computeInventory } from "./lib/inventory";
 import { loadData, saveData, subscribeToChanges } from "./lib/storage";
 import { isSupabaseConfigured } from "./lib/supabase";
+import { isAuthEnabled, getSession, onAuthChange, signOut } from "./lib/auth";
+import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
 import PipelineView from "./components/PipelineView";
 import SalesOrders from "./components/SalesOrders";
@@ -12,18 +14,24 @@ import Suppliers from "./components/Suppliers";
 import Customers from "./components/Customers";
 import Reports from "./components/Reports";
 import AuditLog from "./components/AuditLog";
-import { defaultData } from "./lib/defaultData";
+import Settings from "./components/Settings";
+import DemandPlanning from "./components/DemandPlanning";
+import CycleCount from "./components/CycleCount";
+import { defaultData, demoData } from "./lib/defaultData";
 
 const TABS = [
   { key: "dashboard", label: "Overview", icon: "\u25A1" },
   { key: "pipeline", label: "Pipeline", icon: "\u25A0", hasPipelineBadge: true },
   { key: "sales", label: "Orders", icon: "\u2630" },
   { key: "products", label: "Inventory", icon: "\u25A3", hasAlertBadge: true },
-  { key: "po", label: "Purchase POs", icon: "\u2191" },
+  { key: "po", label: "Supplier POs", icon: "\u2191" },
   { key: "suppliers", label: "Suppliers", icon: "\u2692" },
   { key: "customers", label: "Customers", icon: "\u2B50" },
   { key: "reports", label: "Reports", icon: "\u2261" },
+  { key: "planning", label: "Demand Planning", icon: "\u25C8" },
+  { key: "cyclecount", label: "Cycle Count", icon: "\u2714" },
   { key: "audit", label: "Audit Log", icon: "\u270E" },
+  { key: "settings", label: "Settings", icon: "\u2699" },
 ];
 
 export default function App() {
@@ -33,9 +41,31 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState("idle"); // "idle" | "connected" | "updated"
   const ignoreNextRemote = useRef(false);
 
-  // Load data on mount (async -- Supabase fetch, localStorage fallback)
+  // Auth: only enforced when Supabase is configured.
+  const authRequired = isAuthEnabled();
+  const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Check session on mount and subscribe to auth changes
   useEffect(() => {
+    if (!authRequired) {
+      setAuthChecked(true);
+      return;
+    }
+    getSession().then((s) => {
+      setSession(s);
+      setAuthChecked(true);
+    });
+    return onAuthChange((s) => setSession(s));
+  }, [authRequired]);
+
+  const authed = !authRequired || !!session;
+
+  // Load data once authenticated (async -- Supabase fetch, localStorage fallback)
+  useEffect(() => {
+    if (!authChecked || !authed) return;
     let cancelled = false;
+    setLoading(true);
     loadData().then((loaded) => {
       if (!cancelled) {
         setDataRaw(loaded);
@@ -43,11 +73,11 @@ export default function App() {
       }
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [authChecked, authed]);
 
   // Subscribe to real-time changes from other users
   useEffect(() => {
-    if (!isSupabaseConfigured()) return;
+    if (!isSupabaseConfigured() || !authed) return;
     setSyncStatus("connected");
 
     const unsubscribe = subscribeToChanges((remoteData) => {
@@ -63,7 +93,7 @@ export default function App() {
     });
 
     return unsubscribe;
-  }, []);
+  }, [authed]);
 
   const setData = useCallback((updater) => {
     setDataRaw((prev) => {
@@ -84,6 +114,34 @@ export default function App() {
 
   const pipelineCount = data.salesOrders.filter((o) => LOCKING.has(o.fulfillmentStage)).length;
   const alertCount = data.products.filter((p) => p.available <= p.reorderPoint).length;
+
+  // While checking the session, show a minimal splash
+  if (authRequired && !authChecked) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: "100vh",
+          background: "#F1F5F9",
+          fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+        }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontWeight: 900, fontSize: 20, color: "#0F172A", marginBottom: 8 }}>
+            ACC Crappie Stix
+          </div>
+          <div style={{ fontSize: 13, color: "#94A3B8" }}>Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Gate the app behind a login when auth is enabled
+  if (authRequired && !session) {
+    return <Login />;
+  }
 
   // Loading screen
   if (loading) {
@@ -256,7 +314,7 @@ export default function App() {
           </div>
           <button
             onClick={() => {
-              if (window.confirm("Reset all data to defaults?")) setData(defaultData);
+              if (window.confirm("Reset all data to demo catalog? This will overwrite your current data.")) setData(demoData);
             }}
             style={{
               fontSize: 11,
@@ -270,6 +328,41 @@ export default function App() {
           >
             Reset to defaults
           </button>
+
+          {authRequired && session && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #E2E8F0" }}>
+              <div
+                style={{
+                  fontSize: 10,
+                  color: "#94A3B8",
+                  marginBottom: 6,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                title={session.user?.email}
+              >
+                {session.user?.email}
+              </div>
+              <button
+                onClick={() => signOut()}
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "#475569",
+                  background: "#F8FAFC",
+                  border: "1px solid #CBD5E1",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  padding: "6px 12px",
+                  fontFamily: "inherit",
+                  width: "100%",
+                }}
+              >
+                Sign Out
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -291,7 +384,10 @@ export default function App() {
         {tab === "suppliers" && <Suppliers data={data} setData={setData} />}
         {tab === "customers" && <Customers data={data} setData={setData} />}
         {tab === "reports" && <Reports data={data} />}
+        {tab === "planning" && <DemandPlanning data={data} setData={setData} />}
+        {tab === "cyclecount" && <CycleCount data={data} setData={setData} />}
         {tab === "audit" && <AuditLog data={data} setData={setData} />}
+        {tab === "settings" && <Settings data={data} setData={setData} />}
       </div>
     </div>
   );

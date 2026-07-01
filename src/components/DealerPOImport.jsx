@@ -2,7 +2,7 @@ import { useState, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { LOCKING, COL_ALIASES } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
-import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol } from "../lib/utils";
+import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow } from "../lib/utils";
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
 import { Modal, Field, Badge, IS, SS, BP, BS, BG } from "./ui";
 
@@ -68,6 +68,12 @@ const ACC_STEPS = [
   { key: "done", label: "Done" },
 ];
 
+const AUTO_STEPS = [
+  { key: "upload", label: "Upload File" },
+  { key: "review", label: "Review & Import" },
+  { key: "done", label: "Done" },
+];
+
 // =============================================================================
 // DealerPOImport component
 // =============================================================================
@@ -86,6 +92,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
   const [lines, setLines] = useState([]);
   const [error, setError] = useState("");
   const [importMode, setImportMode] = useState(""); // "csv" | "acc"
+  const [autoMapped, setAutoMapped] = useState(false); // true when columns were auto-detected
   const fileRef = useRef();
 
   const computedProds = useMemo(
@@ -105,6 +112,35 @@ export default function DealerPOImport({ data, setData, onClose }) {
   const findProduct = (sku) => {
     if (!sku) return null;
     return skuMap[String(sku).toLowerCase().trim()] || null;
+  };
+
+  // --- Build lines from raw data (used for auto-map and manual map) ----------
+  const buildLinesFromData = (rows, map) => {
+    if (!map.sku || !map.qty) return null;
+    const built = rows
+      .map((row) => {
+        const sku = String(row[map.sku] || "").trim();
+        const qty = parseInt(String(row[map.qty] || "0").replace(/\s/g, "")) || 0;
+        const price = map.price ? parseFloat(row[map.price]) || 0 : 0;
+        const name = map.name ? String(row[map.name] || "").trim() : "";
+        if (!sku || qty <= 0) return null;
+        const prod = findProduct(sku);
+        const cp = prod ? computedProds.find((c) => c.id === prod.id) : null;
+        return {
+          sku,
+          qty,
+          cost: price,
+          msrp: 0,
+          desc: name || (prod ? prod.name : ""),
+          productId: prod ? prod.id : "",
+          productName: prod ? prod.name : "",
+          available: cp ? cp.available : 0,
+          sellPrice: prod ? prod.sellPrice : price,
+          matched: !!prod,
+        };
+      })
+      .filter(Boolean);
+    return built.length > 0 ? built : null;
   };
 
   // --- File upload handler ---------------------------------------------------
@@ -142,6 +178,17 @@ export default function DealerPOImport({ data, setData, onClose }) {
           }
 
           setImportMode("csv");
+
+          // Auto-skip map step when SKU + Qty columns detected
+          if (autoMap.sku && autoMap.qty) {
+            const built = buildLinesFromData(rows, autoMap);
+            if (built) {
+              setLines(built);
+              setAutoMapped(true);
+              setStep("review");
+              return;
+            }
+          }
           setStep("map");
         } catch (err) {
           setError("Failed to parse CSV: " + err.message);
@@ -196,9 +243,17 @@ export default function DealerPOImport({ data, setData, onClose }) {
             return;
           }
 
-          // Generic XLSX -- treat as flat table (first row = headers)
-          const jsonRows = XLSX.utils.sheet_to_json(ws, { defval: "" });
-          if (jsonRows.length === 0) {
+          // Generic XLSX -- scan for header row (may not be row 1)
+          const hdrResult = findHeaderRow(sheetData, COL_ALIASES);
+          let jsonRows;
+          if (hdrResult && hdrResult.headerRowIdx > 0) {
+            // Header row found below row 1 -- re-parse using that row as header
+            jsonRows = XLSX.utils.sheet_to_json(ws, { defval: "", range: hdrResult.headerRowIdx });
+          } else {
+            // First row is the header (normal flat table)
+            jsonRows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+          }
+          if (!jsonRows || jsonRows.length === 0) {
             setError("Spreadsheet has no data rows.");
             return;
           }
@@ -219,6 +274,17 @@ export default function DealerPOImport({ data, setData, onClose }) {
           }
 
           setImportMode("csv");
+
+          // Auto-skip map step when SKU + Qty columns detected
+          if (autoMap.sku && autoMap.qty) {
+            const built = buildLinesFromData(jsonRows, autoMap);
+            if (built) {
+              setLines(built);
+              setAutoMapped(true);
+              setStep("review");
+              return;
+            }
+          }
           setStep("map");
         } catch (err) {
           setError("Failed to parse spreadsheet: " + err.message);
@@ -230,37 +296,14 @@ export default function DealerPOImport({ data, setData, onClose }) {
     }
   };
 
-  // --- Build lines from CSV column mapping -----------------------------------
+  // --- Build lines from CSV column mapping (manual map step) -----------------
   const buildLinesFromMap = () => {
     if (!colMap.sku || !colMap.qty) {
       setError("SKU and Quantity columns are required.");
       return;
     }
-    const built = rawRows
-      .map((row) => {
-        const sku = String(row[colMap.sku] || "").trim();
-        const qty = parseInt(String(row[colMap.qty] || "0").replace(/\s/g, "")) || 0;
-        const price = colMap.price ? parseFloat(row[colMap.price]) || 0 : 0;
-        const name = colMap.name ? String(row[colMap.name] || "").trim() : "";
-        if (!sku || qty <= 0) return null;
-        const prod = findProduct(sku);
-        const cp = prod ? computedProds.find((c) => c.id === prod.id) : null;
-        return {
-          sku,
-          qty,
-          cost: price,
-          msrp: 0,
-          desc: name || (prod ? prod.name : ""),
-          productId: prod ? prod.id : "",
-          productName: prod ? prod.name : "",
-          available: cp ? cp.available : 0,
-          sellPrice: prod ? prod.sellPrice : price,
-          matched: !!prod,
-        };
-      })
-      .filter(Boolean);
-
-    if (built.length === 0) {
+    const built = buildLinesFromData(rawRows, colMap);
+    if (!built) {
       setError("No valid lines found. Check that SKU and Qty columns are correctly mapped.");
       return;
     }
@@ -315,21 +358,52 @@ export default function DealerPOImport({ data, setData, onClose }) {
       ? `Imported PO ${dealerInfo.poRef || "?"} from ${dealerInfo.customer} -- ${validLines.length} lines * ${fmtNum(totalUnits)} units * ${fmt(totalCost)} ${parsedMeta.fileType} cost${parsedMeta.buyerName ? " * Buyer: " + parsedMeta.buyerName : ""}`
       : `Imported ${dealerInfo.poRef || "dealer PO"} from ${dealerInfo.customer} -- ${fmtNum(totalUnits)} units`;
 
-    setData((d) => ({
-      ...d,
-      salesOrders: [...d.salesOrders, order],
-      counters: { ...d.counters, so: num },
-      auditLog: [
-        ...(d.auditLog || []),
-        {
+    setData((d) => {
+      const customerName = (dealerInfo.customer || "Unknown Dealer").trim();
+      const existing = (d.customers || []).find(
+        (c) => c.name.toLowerCase().trim() === customerName.toLowerCase(),
+      );
+
+      // Auto-create customer if not in the database
+      let customers = d.customers || [];
+      const newCustLogs = [];
+      if (!existing && customerName && customerName !== "Unknown Dealer") {
+        const newCust = {
+          id: uid(),
+          name: customerName,
+          type: parsedMeta ? parsedMeta.fileType : "dealer",
+          email: parsedMeta && parsedMeta.buyerEmail ? parsedMeta.buyerEmail : "",
+          phone: "",
+          address: parsedMeta && parsedMeta.shipToAddr ? parsedMeta.shipToAddr : "",
+        };
+        customers = [...customers, newCust];
+        newCustLogs.push({
           id: uid(),
           ts: nowIso(),
-          type: "dealer-import",
-          entity: orderNum,
-          description: desc,
-        },
-      ],
-    }));
+          type: "adjustment",
+          entity: customerName,
+          description: `Auto-added customer "${customerName}" (${newCust.type}) from PO import`,
+        });
+      }
+
+      return {
+        ...d,
+        customers,
+        salesOrders: [...d.salesOrders, order],
+        counters: { ...d.counters, so: num },
+        auditLog: [
+          ...(d.auditLog || []),
+          {
+            id: uid(),
+            ts: nowIso(),
+            type: "dealer-import",
+            entity: orderNum,
+            description: desc,
+          },
+          ...newCustLogs,
+        ],
+      };
+    });
 
     setStep("done");
   };
@@ -345,10 +419,11 @@ export default function DealerPOImport({ data, setData, onClose }) {
     setLines([]);
     setError("");
     setImportMode("");
+    setAutoMapped(false);
   };
 
   // --- Active step set for rendering -----------------------------------------
-  const activeSteps = importMode === "acc" ? ACC_STEPS : STEPS;
+  const activeSteps = importMode === "acc" ? ACC_STEPS : autoMapped ? AUTO_STEPS : STEPS;
 
   // --- Stats for review step -------------------------------------------------
   const matchedLines = lines.filter((l) => l.matched);
@@ -360,7 +435,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
   // RENDER
   // ===========================================================================
   return (
-    <Modal title="Import Dealer Purchase Order" onClose={onClose} width={820}>
+    <Modal title="Import New Dealer / Distributor PO" onClose={onClose} width={820}>
       <StepTab steps={activeSteps} current={step} />
 
       {error && (
@@ -940,52 +1015,126 @@ export default function DealerPOImport({ data, setData, onClose }) {
       {/* ================================================================== */}
       {step === "review" && (
         <div>
-          {/* Summary card */}
-          <div
-            style={{
-              background: "#FFFFFF",
-              border: "1px solid #E2E8F0",
-              borderRadius: 10,
-              padding: "16px 20px",
-              marginBottom: 18,
-            }}
-          >
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 12 }}>
-              Import Summary
+          {/* Auto-mapped success banner */}
+          {importMode === "csv" && autoMapped && (
+            <div
+              style={{
+                background: "#F0FDF4",
+                border: "1px solid #BBF7D0",
+                borderRadius: 10,
+                padding: "10px 14px",
+                marginBottom: 16,
+                fontSize: 12,
+                color: "#15803D",
+              }}
+            >
+              Columns auto-detected:{" "}
+              <strong>SKU</strong> &rarr; {colMap.sku}
+              {colMap.qty && <>, <strong>Qty</strong> &rarr; {colMap.qty}</>}
+              {colMap.price && <>, <strong>Price</strong> &rarr; {colMap.price}</>}
+              {colMap.name && <>, <strong>Description</strong> &rarr; {colMap.name}</>}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div style={{ fontSize: 12, color: "#64748B" }}>
-                <strong>Customer:</strong> {dealerInfo.customer || "--"}
+          )}
+
+          {/* Editable order info for CSV imports (auto-mapped or manual) */}
+          {importMode === "csv" && (
+            <div
+              style={{
+                background: "#FFFFFF",
+                border: "1px solid #E2E8F0",
+                borderRadius: 10,
+                padding: "16px 20px",
+                marginBottom: 18,
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 12 }}>
+                Order Info
               </div>
-              <div style={{ fontSize: 12, color: "#64748B" }}>
-                <strong>PO Ref:</strong> {dealerInfo.poRef || "--"}
-              </div>
-              <div style={{ fontSize: 12, color: "#64748B" }}>
-                <strong>Date:</strong> {fmtDate(dealerInfo.date)}
-              </div>
-              <div style={{ fontSize: 12, color: "#64748B" }}>
-                <strong>Type:</strong>{" "}
-                <Badge
-                  status={parsedMeta ? parsedMeta.fileType : "dealer"}
-                  label={parsedMeta ? parsedMeta.fileType : "Dealer"}
-                />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
+                <Field label="Customer / Dealer Name *">
+                  <input
+                    style={IS}
+                    value={dealerInfo.customer}
+                    onChange={(e) => setDealerInfo((d) => ({ ...d, customer: e.target.value }))}
+                    placeholder="e.g. Bass Pro Shops"
+                  />
+                </Field>
+                <Field label="Dealer PO Reference">
+                  <input
+                    style={IS}
+                    value={dealerInfo.poRef}
+                    onChange={(e) => setDealerInfo((d) => ({ ...d, poRef: e.target.value }))}
+                    placeholder="e.g. BPS-55021"
+                  />
+                </Field>
+                <Field label="Order Date">
+                  <input
+                    style={IS}
+                    type="date"
+                    value={dealerInfo.date}
+                    onChange={(e) => setDealerInfo((d) => ({ ...d, date: e.target.value }))}
+                  />
+                </Field>
+                <Field label="Notes">
+                  <input
+                    style={IS}
+                    value={dealerInfo.notes}
+                    onChange={(e) => setDealerInfo((d) => ({ ...d, notes: e.target.value }))}
+                    placeholder="Optional"
+                  />
+                </Field>
               </div>
             </div>
-            {dealerInfo.notes && (
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "#64748B",
-                  marginTop: 8,
-                  background: "#F8FAFC",
-                  padding: "8px 12px",
-                  borderRadius: 6,
-                }}
-              >
-                <strong>Notes:</strong> {dealerInfo.notes}
+          )}
+
+          {/* Read-only summary for ACC imports */}
+          {importMode === "acc" && (
+            <div
+              style={{
+                background: "#FFFFFF",
+                border: "1px solid #E2E8F0",
+                borderRadius: 10,
+                padding: "16px 20px",
+                marginBottom: 18,
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 12 }}>
+                Import Summary
               </div>
-            )}
-          </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div style={{ fontSize: 12, color: "#64748B" }}>
+                  <strong>Customer:</strong> {dealerInfo.customer || "--"}
+                </div>
+                <div style={{ fontSize: 12, color: "#64748B" }}>
+                  <strong>PO Ref:</strong> {dealerInfo.poRef || "--"}
+                </div>
+                <div style={{ fontSize: 12, color: "#64748B" }}>
+                  <strong>Date:</strong> {fmtDate(dealerInfo.date)}
+                </div>
+                <div style={{ fontSize: 12, color: "#64748B" }}>
+                  <strong>Type:</strong>{" "}
+                  <Badge
+                    status={parsedMeta.fileType}
+                    label={parsedMeta.fileType}
+                  />
+                </div>
+              </div>
+              {dealerInfo.notes && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#64748B",
+                    marginTop: 8,
+                    background: "#F8FAFC",
+                    padding: "8px 12px",
+                    borderRadius: 6,
+                  }}
+                >
+                  <strong>Notes:</strong> {dealerInfo.notes}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Line items with availability check */}
           <div
@@ -1170,7 +1319,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
             <button
               style={BS}
-              onClick={() => setStep(importMode === "acc" ? "acc-preview" : "map")}
+              onClick={() => setStep(importMode === "acc" ? "acc-preview" : autoMapped ? "upload" : "map")}
             >
               Back
             </button>
