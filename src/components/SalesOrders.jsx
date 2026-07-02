@@ -732,17 +732,9 @@ export default function SalesOrders({ data, setData }) {
     return c;
   }, [data.salesOrders]);
 
-  // --- Open create / edit -------------------------------------------------------
-  const openNew = () => {
-    setForm(blankOrder());
-    setEditing("new");
-  };
-
-  const openPreorder = () => {
-    setForm({ ...blankOrder(), type: "preorder" });
-    setEditing("preorder");
-  };
-
+  // --- Open edit -----------------------------------------------------------------
+  // New orders are created exclusively through the dealer/distributor PO import
+  // (which offers regular vs pre-order); this modal remains for editing.
   const openEdit = (order) => {
     setForm({
       customer: order.customer,
@@ -935,12 +927,6 @@ export default function SalesOrders({ data, setData }) {
           </button>
           <button style={BAq} onClick={() => setShowImport(true)}>
             Import New Dealer / Distributor PO
-          </button>
-          <button style={{ ...BS, fontSize: 12 }} onClick={openPreorder}>
-            + Pre-Order
-          </button>
-          <button style={BP} onClick={openNew}>
-            + New Order
           </button>
         </div>
       </div>
