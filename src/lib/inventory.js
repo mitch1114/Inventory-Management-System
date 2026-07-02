@@ -1,5 +1,5 @@
 import { LOCKING, STAGE_LABEL } from "./constants";
-import { uid, nowIso } from "./utils";
+import { uid, nowIso, todayIso } from "./utils";
 
 // --- Core inventory engine ----------------------------------------------------
 // available = onHand - locked (locked = all units in confirmed/picked/booked orders)
@@ -28,6 +28,9 @@ export function computeInventory(products, salesOrders) {
 export function advanceStage(data, orderId, newStage, shipInfo, adjustedLines) {
   const order = data.salesOrders.find((o) => o.id === orderId);
   if (!order) return data;
+  // Guard against double-advancing (e.g. two users shipping the same order
+  // would deduct onHand twice).
+  if (order.fulfillmentStage === newStage) return data;
 
   // Build updated order lines if adjusted quantities were provided
   let updatedOrderLines = order.lines;
@@ -86,6 +89,109 @@ export function advanceStage(data, orderId, newStage, shipInfo, adjustedLines) {
     },
   ];
   return { ...data, products, salesOrders, auditLog };
+}
+
+// Resolve outstanding backorders on an order before it ships, so shipped
+// orders never carry untracked backorders.
+//
+// policy "kill" (fill & kill): cancel the remainder. Ordered quantities stay on
+//   the lines and the cancelled amount is recorded as qtyKilled, so fill-rate
+//   reporting still reflects the shortfall after shipment.
+// policy "split": move the remainder to a new confirmed sales order (numbered
+//   like any other SO, tagged with backorderOf) that locks stock and auto-fills
+//   from receiving like a normal order.
+export function resolveBackorders(data, orderId, policy) {
+  const order = data.salesOrders.find((o) => o.id === orderId);
+  if (!order) return data;
+  const boOf = (l) => (l.qtyBackordered != null ? l.qtyBackordered : 0);
+  const boLines = (order.lines || []).filter((l) => boOf(l) > 0);
+  if (boLines.length === 0) return data;
+  const totalBO = boLines.reduce((s, l) => s + boOf(l), 0);
+
+  if (policy === "kill") {
+    const salesOrders = data.salesOrders.map((o) =>
+      o.id === orderId
+        ? {
+            ...o,
+            lines: o.lines.map((l) =>
+              boOf(l) > 0
+                ? { ...l, qtyBackordered: 0, qtyKilled: (l.qtyKilled || 0) + boOf(l) }
+                : l,
+            ),
+          }
+        : o,
+    );
+    return {
+      ...data,
+      salesOrders,
+      auditLog: [
+        ...(data.auditLog || []),
+        {
+          id: uid(),
+          ts: nowIso(),
+          type: "fill-kill",
+          entity: order.orderNum,
+          description: `Fill & kill: cancelled ${totalBO} backordered unit(s) on ${order.orderNum} (${order.customer}) at shipment`,
+        },
+      ],
+    };
+  }
+
+  // policy "split" -- carve the remainder into a tracked backorder order
+  const computed = computeInventory(data.products, data.salesOrders);
+  const availMap = Object.fromEntries(computed.map((p) => [p.id, p.available]));
+  const num = ((data.counters && data.counters.so) || 0) + 1;
+  const orderNum = `SO-${String(num).padStart(4, "0")}`;
+  const childLines = boLines.map((l) => {
+    const avail = availMap[l.productId] || 0;
+    const filled = Math.min(boOf(l), avail);
+    availMap[l.productId] = avail - filled;
+    return {
+      productId: l.productId,
+      qty: boOf(l),
+      price: l.price,
+      qtyFilled: filled,
+      qtyBackordered: boOf(l) - filled,
+    };
+  });
+  const child = {
+    id: uid(),
+    orderNum,
+    customer: order.customer,
+    date: todayIso(),
+    fulfillmentStage: "confirmed",
+    type: order.type || "standard",
+    dealerPORef: order.dealerPORef || "",
+    backorderOf: order.orderNum,
+    lines: childLines,
+    shipment: {},
+    notes: `Backorder carried over from ${order.orderNum}`,
+  };
+  const salesOrders = data.salesOrders.map((o) =>
+    o.id === orderId
+      ? {
+          ...o,
+          lines: o.lines.map((l) =>
+            boOf(l) > 0 ? { ...l, qty: l.qty - boOf(l), qtyBackordered: 0 } : l,
+          ),
+        }
+      : o,
+  );
+  return {
+    ...data,
+    salesOrders: [...salesOrders, child],
+    counters: { ...(data.counters || {}), so: num },
+    auditLog: [
+      ...(data.auditLog || []),
+      {
+        id: uid(),
+        ts: nowIso(),
+        type: "backorder-split",
+        entity: orderNum,
+        description: `Moved ${totalBO} backordered unit(s) from ${order.orderNum} to backorder order ${orderNum} (${order.customer})`,
+      },
+    ],
+  };
 }
 
 export function autoAllocate(data, receivedLines) {

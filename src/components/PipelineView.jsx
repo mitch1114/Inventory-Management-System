@@ -1,7 +1,8 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING } from "../lib/constants";
-import { computeInventory, advanceStage } from "../lib/inventory";
+import { computeInventory, advanceStage, resolveBackorders } from "../lib/inventory";
+import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
@@ -33,6 +34,7 @@ const PICK_VERIFY_HELP = [
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
   const [showInventory, setShowInventory] = useState(false); // live-inventory table collapsed by default
+  const [boPolicy, setBoPolicy] = useState("kill"); // what to do with backorders at ship time
   const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso() });
   const [pickQtys, setPickQtys] = useState([]); // [{productId, qtyFilled}] for pick confirmation
   const [ssPushing, setSsPushing] = useState(false); // ShipStation push in progress
@@ -190,6 +192,7 @@ export default function PipelineView({ data, setData }) {
     setPickLastScan(null);
     setPickScanError(null);
     setMispicks([]);
+    setBoPolicy("kill");
   };
 
   const doAdvance = async () => {
@@ -200,7 +203,9 @@ export default function PipelineView({ data, setData }) {
     // Pass adjusted lines when moving to "picked" (confirmed -> picked)
     const adjusted = next === "picked" ? pickQtys : null;
     setData((d) => {
-      let result = advanceStage(d, o.id, next, next === "shipped" ? shipForm : null, adjusted);
+      // Resolve any outstanding backorders before shipping (fill & kill or split)
+      const base = next === "shipped" ? resolveBackorders(d, o.id, boPolicy) : d;
+      let result = advanceStage(base, o.id, next, next === "shipped" ? shipForm : null, adjusted);
       // Log mispicks if any occurred during picking
       if (next === "picked" && mispicks.length > 0) {
         result = {
@@ -1096,6 +1101,13 @@ export default function PipelineView({ data, setData }) {
                 {advModal.lines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0)}{" "}
                 units from on-hand inventory.
               </div>
+              {advModal.lines.reduce((s, l) => s + (l.qtyBackordered != null ? l.qtyBackordered : 0), 0) > 0 && (
+                <BackorderPolicyPicker
+                  count={advModal.lines.reduce((s, l) => s + (l.qtyBackordered != null ? l.qtyBackordered : 0), 0)}
+                  value={boPolicy}
+                  onChange={setBoPolicy}
+                />
+              )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
                 <Field label="Carrier">
                   <input
