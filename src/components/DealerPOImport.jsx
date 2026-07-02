@@ -93,6 +93,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
   const [error, setError] = useState("");
   const [importMode, setImportMode] = useState(""); // "csv" | "acc"
   const [autoMapped, setAutoMapped] = useState(false); // true when columns were auto-detected
+  const [orderKind, setOrderKind] = useState("regular"); // "regular" | "preorder"
   const fileRef = useRef();
 
   const computedProds = useMemo(
@@ -323,10 +324,13 @@ export default function DealerPOImport({ data, setData, onClose }) {
     const num = (data.counters.so || 0) + 1;
     const orderNum = `SO-${String(num).padStart(4, "0")}`;
 
+    const isPreorder = orderKind === "preorder";
     const orderLines = validLines.map((l) => {
       const cp = computedProds.find((c) => c.id === l.productId);
       const avail = cp ? cp.available : 0;
-      const filled = Math.min(l.qty, avail);
+      // Pre-orders reserve nothing now -- everything backorders and auto-fills
+      // when stock is received.
+      const filled = isPreorder ? 0 : Math.min(l.qty, avail);
       const bo = l.qty - filled;
       return {
         productId: l.productId,
@@ -347,16 +351,17 @@ export default function DealerPOImport({ data, setData, onClose }) {
       customer: dealerInfo.customer || "Unknown Dealer",
       date: dealerInfo.date || todayIso(),
       fulfillmentStage: "confirmed",
-      type: parsedMeta ? parsedMeta.fileType : "dealer",
+      type: isPreorder ? "preorder" : parsedMeta ? parsedMeta.fileType : "dealer",
       dealerPORef: dealerInfo.poRef || "",
       lines: orderLines,
       shipment: {},
       notes: dealerInfo.notes || "",
     };
 
+    const kindLabel = isPreorder ? " as PRE-ORDER" : "";
     const desc = parsedMeta
-      ? `Imported PO ${dealerInfo.poRef || "?"} from ${dealerInfo.customer} -- ${validLines.length} lines * ${fmtNum(totalUnits)} units * ${fmt(totalCost)} ${parsedMeta.fileType} cost${parsedMeta.buyerName ? " * Buyer: " + parsedMeta.buyerName : ""}`
-      : `Imported ${dealerInfo.poRef || "dealer PO"} from ${dealerInfo.customer} -- ${fmtNum(totalUnits)} units`;
+      ? `Imported PO ${dealerInfo.poRef || "?"} from ${dealerInfo.customer}${kindLabel} -- ${validLines.length} lines * ${fmtNum(totalUnits)} units * ${fmt(totalCost)} ${parsedMeta.fileType} cost${parsedMeta.buyerName ? " * Buyer: " + parsedMeta.buyerName : ""}`
+      : `Imported ${dealerInfo.poRef || "dealer PO"} from ${dealerInfo.customer}${kindLabel} -- ${fmtNum(totalUnits)} units`;
 
     setData((d) => {
       const customerName = (dealerInfo.customer || "Unknown Dealer").trim();
@@ -418,6 +423,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
     setDealerInfo({ customer: "", poRef: "", date: todayIso(), notes: "" });
     setLines([]);
     setError("");
+    setOrderKind("regular");
     setImportMode("");
     setAutoMapped(false);
   };
@@ -1136,6 +1142,64 @@ export default function DealerPOImport({ data, setData, onClose }) {
             </div>
           )}
 
+          {/* Order type: regular (allocates stock now) vs pre-order (all to backorder) */}
+          <div
+            style={{
+              background: "#FFFFFF",
+              border: "1px solid #E2E8F0",
+              borderRadius: 10,
+              padding: "12px 16px",
+              marginBottom: 18,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 8 }}>
+              Order Type
+            </div>
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+              {[
+                {
+                  key: "regular",
+                  title: "Regular order",
+                  desc: "Fills from available stock now; any shortfall goes to backorder.",
+                },
+                {
+                  key: "preorder",
+                  title: "Pre-order",
+                  desc: "Reserves nothing now -- all units go to backorder and auto-fill when stock arrives.",
+                },
+              ].map((opt) => (
+                <label
+                  key={opt.key}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "flex-start",
+                    cursor: "pointer",
+                    flex: "1 1 260px",
+                    background: orderKind === opt.key ? "#F5F3FF" : "transparent",
+                    border: `1px solid ${orderKind === opt.key ? "#C4B5FD" : "#E2E8F0"}`,
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="import-order-kind"
+                    checked={orderKind === opt.key}
+                    onChange={() => setOrderKind(opt.key)}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>{opt.title}</span>
+                    <span style={{ fontSize: 12, color: "#64748B", display: "block", marginTop: 1 }}>
+                      {opt.desc}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
           {/* Line items with availability check */}
           <div
             style={{
@@ -1188,7 +1252,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
                   {matchedLines.map((l, i) => {
                     const cp = computedProds.find((c) => c.id === l.productId);
                     const avail = cp ? cp.available : 0;
-                    const filled = Math.min(l.qty, avail);
+                    const filled = orderKind === "preorder" ? 0 : Math.min(l.qty, avail);
                     const bo = l.qty - filled;
                     return (
                       <tr
@@ -1274,8 +1338,26 @@ export default function DealerPOImport({ data, setData, onClose }) {
             </div>
           </div>
 
+          {/* Pre-order note */}
+          {orderKind === "preorder" && (
+            <div
+              style={{
+                background: "#F5F3FF",
+                border: "1px solid #C4B5FD",
+                borderRadius: 10,
+                padding: "12px 16px",
+                marginBottom: 18,
+                fontSize: 12,
+                color: "#5B21B6",
+              }}
+            >
+              <strong>Pre-order:</strong> no stock is reserved now. All units go to backorder and
+              auto-fill as inventory is received via Purchase Orders.
+            </div>
+          )}
+
           {/* Backorder warning */}
-          {matchedLines.some((l) => {
+          {orderKind !== "preorder" && matchedLines.some((l) => {
             const cp = computedProds.find((c) => c.id === l.productId);
             return l.qty > (cp ? cp.available : 0);
           }) && (
