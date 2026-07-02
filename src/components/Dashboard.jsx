@@ -98,7 +98,7 @@ export default function Dashboard({ data }) {
       <div style={{ marginBottom: 20 }}>
         <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: 0 }}>Overview</h2>
         <p style={{ color: "#94A3B8", margin: "4px 0 0", fontSize: 13 }}>
-          Available = On Hand - Pipeline Locked &middot; OnHand only decrements at Shipped
+          Available = On Hand - Open Order Locked &middot; OnHand only decrements at Shipped
         </p>
       </div>
       <div
@@ -110,7 +110,7 @@ export default function Dashboard({ data }) {
         }}
       >
         <Stat label="Available to Sell" value={fmt(totalAvail)} sub="at cost" accent="#10B981" />
-        <Stat label="Locked in Pipeline" value={fmt(totalLocked)} sub="confirmed->booked" accent="#EAB308" warn />
+        <Stat label="Locked in Open Orders" value={fmt(totalLocked)} sub="confirmed->booked" accent="#EAB308" warn />
         <Stat label="Backordered Units" value={fmtNum(totalBO)} accent="#F97316" warn={totalBO > 0} />
         <Stat
           label="Fill Rate"
@@ -127,7 +127,7 @@ export default function Dashboard({ data }) {
           warn={fillStats.revenueLost > 0}
         />
         <Stat
-          label="Active in Pipeline"
+          label="Open Orders"
           value={(pipeline.confirmed || 0) + (pipeline.picked || 0) + (pipeline.booked || 0)}
           sub="confirmed+picked+booked"
           accent="#3B82F6"
@@ -146,7 +146,7 @@ export default function Dashboard({ data }) {
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontWeight: 700, color: "#334155", fontSize: 13 }}>
-            Pipeline Status
+            Open Order Status
           </div>
           <div style={{ display: "flex", gap: 4 }}>
             {[["all", "All Time"], ["7d", "Last 7 Days"]].map(([key, label]) => (

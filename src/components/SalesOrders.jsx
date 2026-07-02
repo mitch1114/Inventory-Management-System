@@ -1,11 +1,18 @@
 import { useState, useMemo } from "react";
-import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING } from "../lib/constants";
+import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS } from "../lib/constants";
 import { computeInventory, advanceStage, resolveBackorders } from "../lib/inventory";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
 import { isQboConnected, fetchInvoices } from "../lib/qbo";
+import { sendShippedEmail } from "../lib/notify";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
+
+// Display label for a sales channel value (falls back to the raw value)
+const channelLabel = (v) => {
+  const c = CHANNELS.find((ch) => ch.value === v);
+  return c ? c.label : v;
+};
 
 // --- OrderDrawer (detail panel) ------------------------------------------------
 function OrderDrawer({ order, data, setData, onClose, onEdit }) {
@@ -75,6 +82,12 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     // Resolve any outstanding backorders (fill & kill or split) before shipping
     setData((d) => advanceStage(resolveBackorders(d, order.id, boPolicy), order.id, "shipped", shipForm));
     setShipModal(false);
+    // Fire-and-forget shipped notification -- never block or fail the ship flow
+    try {
+      sendShippedEmail({ ...order, shipment: shipForm }, data.customers);
+    } catch (_e) {
+      /* ignore */
+    }
   };
 
   // --- Cancel order ---
@@ -162,6 +175,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
           />
           {order.type === "preorder" && <Badge status="preorder" label="Pre-order" />}
           {order.type === "distributor" && <Badge status="distributor" label="Distributor" />}
+          {order.showOrder && <Badge status="show-order" label="Show" />}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {!isCancelled && !isShipped && (
@@ -215,6 +229,16 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
             </div>
             <div style={{ fontSize: 14, color: "#334155" }}>{fmtDate(order.date)}</div>
           </div>
+          {order.requestedShipDate && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
+                Requested Ship
+              </div>
+              <div style={{ fontSize: 14, color: "#334155" }}>
+                {fmtDate(order.requestedShipDate)}
+              </div>
+            </div>
+          )}
           {order.dealerPORef && (
             <div>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
@@ -366,6 +390,23 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
             }}
           >
             <strong>Notes:</strong> {order.notes}
+          </div>
+        )}
+
+        {/* Special instructions */}
+        {order.specialInstructions && (
+          <div
+            style={{
+              background: "#FFFBEB",
+              border: "1px solid #FDE68A",
+              borderRadius: 10,
+              padding: "10px 14px",
+              marginBottom: 18,
+              fontSize: 13,
+              color: "#92400E",
+            }}
+          >
+            <strong>Special Instructions:</strong> {order.specialInstructions}
           </div>
         )}
 
@@ -964,7 +1005,7 @@ export default function SalesOrders({ data, setData }) {
 
       {/* Orders table */}
       <Table
-        headers={["Order #", "Customer", "Date", "Stage", "Invoice", "Type", "Lines", "Value", "Notes"]}
+        headers={["Order #", "PO #", "Customer", "Date", "Stage", "Invoice", "Type", "Lines", "Value", "Notes"]}
         empty={filtered.length === 0 ? "No sales orders match your filters." : null}
       >
         {filtered.map((o, i) => {
@@ -992,6 +1033,7 @@ export default function SalesOrders({ data, setData }) {
                   {o.orderNum}
                 </span>
               </TD>
+              <TD mono>{o.dealerPORef || "--"}</TD>
               <TD>
                 <span
                   style={{ cursor: "pointer" }}
@@ -1053,6 +1095,10 @@ export default function SalesOrders({ data, setData }) {
                   {o.type && o.type !== "standard" && (
                     <Badge status={o.type} label={o.type} />
                   )}
+                  {o.channel && (
+                    <Badge status={o.channel} label={channelLabel(o.channel)} />
+                  )}
+                  {o.showOrder && <Badge status="show-order" label="Show" />}
                   {hasBO && <Badge status="backordered" label="BO" />}
                   {o.backorderOf && (
                     <Badge status="backordered" label={`BO of ${o.backorderOf}`} />
@@ -1086,7 +1132,7 @@ export default function SalesOrders({ data, setData }) {
                     display: "inline-block",
                   }}
                 >
-                  {o.dealerPORef || o.notes || "--"}
+                  {o.notes || "--"}
                 </span>
               </TD>
             </TR>

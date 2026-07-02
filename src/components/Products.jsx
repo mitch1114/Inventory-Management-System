@@ -451,6 +451,7 @@ function SkuDrawer({ product, data, setData, onClose, onEdit }) {
 // =============================================================================
 const blankProduct = () => ({
   sku: "",
+  upc: "",
   name: "",
   category: "",
   costPrice: 0,
@@ -508,6 +509,7 @@ export default function Products({ data, setData }) {
   const openEdit = (p) => {
     setForm({
       sku: p.sku,
+      upc: p.upc || "",
       name: p.name,
       category: p.category || "",
       costPrice: p.costPrice || 0,
@@ -583,6 +585,7 @@ export default function Products({ data, setData }) {
   const exportCSV = () => {
     const rows = computedProds.map((p) => ({
       sku: p.sku,
+      upc: p.upc || "",
       name: p.name,
       category: p.category,
       costPrice: p.costPrice,
@@ -596,6 +599,7 @@ export default function Products({ data, setData }) {
     }));
     const csv = toCSV(rows, [
       "sku",
+      "upc",
       "name",
       "category",
       "costPrice",
@@ -636,6 +640,7 @@ export default function Products({ data, setData }) {
       const sku = (row.sku || row.SKU || row["Product Code"] || "").trim();
       if (!sku) continue;
 
+      const upc = (row.upc || row.UPC || row.Upc || "").trim();
       const name = row.name || row.Name || row.description || row.Description || "";
       const category = row.category || row.Category || "";
       const costPrice = parseFloat(row.costPrice || row["Cost Price"] || row.cost || 0) || 0;
@@ -650,6 +655,8 @@ export default function Products({ data, setData }) {
         if (idx >= 0) {
           newProducts[idx] = {
             ...newProducts[idx],
+            // Only overwrite UPC when the CSV cell is non-empty
+            upc: upc || newProducts[idx].upc,
             name: name || newProducts[idx].name,
             category: category || newProducts[idx].category,
             costPrice: costPrice != null && costPrice !== "" ? costPrice : newProducts[idx].costPrice,
@@ -664,6 +671,7 @@ export default function Products({ data, setData }) {
         newProducts.push({
           id: uid(),
           sku,
+          upc,
           name,
           category,
           costPrice,
@@ -759,7 +767,7 @@ export default function Products({ data, setData }) {
 
       {/* Product Table */}
       <Table
-        headers={["SKU", "Product", "Category", "Cost", "Sell", "On Hand", "Locked", "Available", "Status", "Actions"]}
+        headers={["SKU", "UPC", "Product", "Category", "Cost", "Sell", "On Hand", "Locked", "Available", "Status", "Actions"]}
         empty={filtered.length === 0 ? "No products found." : null}
       >
         {filtered.map((p, i) => {
@@ -785,6 +793,7 @@ export default function Products({ data, setData }) {
                   {p.sku}
                 </span>
               </TD>
+              <TD mono>{p.upc || "--"}</TD>
               <TD>
                 <span
                   style={{ cursor: "pointer" }}
@@ -905,6 +914,14 @@ export default function Products({ data, setData }) {
                   <option key={c} value={c} />
                 ))}
               </datalist>
+            </Field>
+            <Field label="UPC">
+              <input
+                style={IS}
+                value={form.upc}
+                onChange={(e) => setForm((f) => ({ ...f, upc: e.target.value }))}
+                placeholder="e.g. 850012345678"
+              />
             </Field>
           </div>
           <Field label="Product Name">

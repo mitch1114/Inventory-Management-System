@@ -21,7 +21,7 @@ import { defaultData, makeDemoData } from "./lib/defaultData";
 
 const TABS = [
   { key: "dashboard", label: "Overview", icon: "\u25A1" },
-  { key: "pipeline", label: "Pipeline", icon: "\u25A0", hasPipelineBadge: true },
+  { key: "pipeline", label: "Open Orders", icon: "\u25A0", hasPipelineBadge: true },
   { key: "sales", label: "Orders", icon: "\u2630" },
   { key: "products", label: "Inventory", icon: "\u25A3", hasAlertBadge: true },
   { key: "po", label: "Supplier POs", icon: "\u2191" },
