@@ -18,6 +18,14 @@ export const LOCKING = new Set(["confirmed", "picked", "booked"]); // these lock
 
 export const STORAGE_KEY = "acc_crappie_v2";
 
+// --- Sales channels -------------------------------------------------------
+export const CHANNELS = [
+  { value: "dealer", label: "Dealer" },
+  { value: "distributor", label: "Distributor" },
+  { value: "buying-group", label: "Buying Group" },
+  { value: "big-box", label: "Big Box" },
+];
+
 // --- Status colors ------------------------------------------------------------
 export const SC = {
   confirmed:       { bg: "#EFF6FF", text: "#1D4ED8", dot: "#3B82F6", border: "#BFDBFE" },
@@ -31,6 +39,8 @@ export const SC = {
   "distributor-t1": { bg: "#F0F9FF", text: "#0369A1", dot: "#0EA5E9", border: "#BAE6FD" },
   "distributor-t2": { bg: "#EFF6FF", text: "#1D4ED8", dot: "#3B82F6", border: "#BFDBFE" },
   "buying-group":  { bg: "#FAF5FF", text: "#6D28D9", dot: "#7C3AED", border: "#DDD6FE" },
+  "big-box":       { bg: "#F1F5F9", text: "#334155", dot: "#64748B", border: "#CBD5E1" },
+  "show-order":    { bg: "#FFFBEB", text: "#92400E", dot: "#F59E0B", border: "#FDE68A" },
   retailer:        { bg: "#F0FDF4", text: "#15803D", dot: "#16A34A", border: "#BBF7D0" },
   dealer:          { bg: "#FFF7ED", text: "#9A3412", dot: "#EA580C", border: "#FED7AA" },
   backordered:     { bg: "#FFF7ED", text: "#9A3412", dot: "#EA580C", border: "#FED7AA" },

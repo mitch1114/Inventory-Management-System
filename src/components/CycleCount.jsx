@@ -87,6 +87,31 @@ export default function CycleCount({ data, setData }) {
   const scanHandlerRef = useRef(null);
   // Debounce repeat reads: the camera fires ~10x/sec while a barcode is in frame.
   const lastReadRef = useRef({ code: null, ts: 0 });
+  // Shared AudioContext for scan feedback beeps -- created lazily on first scan.
+  const audioCtxRef = useRef(null);
+
+  // Haptic + audio feedback so you can scan heads-down without watching the screen.
+  const scanFeedback = useCallback((matched) => {
+    try {
+      if (navigator.vibrate) navigator.vibrate(matched ? 80 : [80, 60, 80]);
+    } catch (_) {}
+    try {
+      if (!audioCtxRef.current) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        audioCtxRef.current = new Ctx();
+      }
+      const ctx = audioCtxRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = matched ? 1200 : 300; // high beep = match, low buzz = no match
+      gain.gain.value = 0.08;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + (matched ? 0.08 : 0.15));
+    } catch (_) {}
+  }, []);
 
   // Review state (after count is complete)
   const [reviewing, setReviewing] = useState(false);
@@ -101,6 +126,10 @@ export default function CycleCount({ data, setData }) {
     data.products.forEach((p) => {
       m[p.sku.toLowerCase()] = p.id;
       m[p.sku.toLowerCase().replace(/[-\s]/g, "")] = p.id;
+      if (p.upc) {
+        m[p.upc.toLowerCase()] = p.id;
+        m[p.upc.toLowerCase().replace(/[-\s]/g, "")] = p.id;
+      }
     });
     return m;
   }, [data.products]);
@@ -149,6 +178,8 @@ export default function CycleCount({ data, setData }) {
     setReviewing(false);
     setSearch("");
     setFilter("all");
+    // Open the camera immediately so counting can start without an extra tap
+    startScanner();
   };
 
   // --- Scanner controls --------------------------------------------------------
@@ -198,6 +229,7 @@ export default function CycleCount({ data, setData }) {
       const productId = skuMap[code.toLowerCase()] || skuMap[normalized];
 
       if (!productId) {
+        scanFeedback(false);
         setLastScan({ code, matched: false });
         return;
       }
@@ -205,6 +237,7 @@ export default function CycleCount({ data, setData }) {
       const lineIdx = lines.findIndex((l) => l.productId === productId);
       if (lineIdx === -1) {
         const prod = prodMap[productId];
+        scanFeedback(false);
         setLastScan({
           code,
           matched: false,
@@ -214,6 +247,7 @@ export default function CycleCount({ data, setData }) {
       }
 
       const prod = prodMap[productId];
+      const newCount = (lines[lineIdx].countedQty || 0) + 1;
       setLines((prev) =>
         prev.map((l, i) =>
           i === lineIdx
@@ -221,9 +255,10 @@ export default function CycleCount({ data, setData }) {
             : l,
         ),
       );
-      setLastScan({ code, matched: true, sku: prod?.sku, name: prod?.name });
+      scanFeedback(true);
+      setLastScan({ code, matched: true, sku: prod?.sku, name: prod?.name, newCount });
     },
-    [lines, skuMap, prodMap],
+    [lines, skuMap, prodMap, scanFeedback],
   );
 
   // Keep the scanner callback pointed at the latest handler (fresh `lines` closure).
@@ -736,18 +771,41 @@ export default function CycleCount({ data, setData }) {
           <div
             style={{
               marginTop: 10,
-              padding: "8px 14px",
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 600,
+              padding: "14px 18px",
+              borderRadius: 10,
+              textAlign: "center",
               background: lastScan.matched ? "#F0FDF4" : "#FEF2F2",
-              border: lastScan.matched ? "1px solid #BBF7D0" : "1px solid #FECACA",
-              color: lastScan.matched ? "#15803D" : "#DC2626",
+              border: lastScan.matched ? "2px solid #22C55E" : "2px solid #EF4444",
             }}
           >
-            {lastScan.matched
-              ? `Scanned: ${lastScan.sku} -- ${lastScan.name}`
-              : `No match for "${lastScan.code}"${lastScan.reason ? ` (${lastScan.reason})` : ""}`}
+            {lastScan.matched ? (
+              <div>
+                <div
+                  style={{
+                    fontSize: 24,
+                    fontWeight: 800,
+                    color: "#15803D",
+                    fontFamily: "monospace",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {lastScan.sku}{" "}
+                  <span style={{ fontFamily: "inherit" }}>&rarr; {fmtNum(lastScan.newCount)}</span>
+                </div>
+                <div style={{ fontSize: 13, color: "#166534", fontWeight: 600, marginTop: 2 }}>
+                  {lastScan.name}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#DC2626", lineHeight: 1.2 }}>
+                  NO MATCH
+                </div>
+                <div style={{ fontSize: 13, color: "#B91C1C", fontWeight: 600, marginTop: 2 }}>
+                  "{lastScan.code}"{lastScan.reason ? ` -- ${lastScan.reason}` : ""}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

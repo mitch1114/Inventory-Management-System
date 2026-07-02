@@ -6,6 +6,7 @@ import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
+import { sendShippedEmail } from "../lib/notify";
 import HelpPanel from "./HelpPanel";
 
 const PICK_VERIFY_HELP = [
@@ -224,6 +225,14 @@ export default function PipelineView({ data, setData }) {
       }
       return result;
     });
+
+    // Fire-and-forget shipped-email notification -- never blocks the ship action
+    if (next === "shipped") {
+      try {
+        sendShippedEmail({ ...o, shipment: shipForm }, data.customers);
+      } catch (_) {}
+    }
+
     setAdvModal(null);
 
     // Auto-push to ShipStation when order reaches "booked"
@@ -327,7 +336,7 @@ export default function PipelineView({ data, setData }) {
     <div>
       <div style={{ marginBottom: 20 }}>
         <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: 0 }}>
-          Fulfillment Pipeline
+          Open Orders
         </h2>
         <p style={{ color: "#64748B", margin: "4px 0 0", fontSize: 13 }}>
           Inventory is locked at <strong style={{ color: "#93C5FD" }}>Confirmed</strong> and stays

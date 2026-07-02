@@ -153,7 +153,12 @@ export function parseAccOrderWriter(sheetData) {
   const shipDateRaw = findLabeledValue(sheetData, "SHIP DATE", headerRow);
   const shipToAddr = findValueBelow(sheetData, "SHIP TO ADDRESS", headerRow);
   const billToAddr = findValueBelow(sheetData, "BILL TO ADDRESS", headerRow);
-  const comments = findLabeledValue(sheetData, "COMMENTS", headerRow) || findValueBelow(sheetData, "COMMENTS", headerRow);
+  // The order writer template labels this "COMMENTS" or (newer) "SPECIAL INSTRUCTIONS".
+  const comments =
+    findLabeledValue(sheetData, "SPECIAL INSTRUCTIONS", headerRow) ||
+    findValueBelow(sheetData, "SPECIAL INSTRUCTIONS", headerRow) ||
+    findLabeledValue(sheetData, "COMMENTS", headerRow) ||
+    findValueBelow(sheetData, "COMMENTS", headerRow);
   const distTotal = findLabeledNumber(sheetData, ["DISTRIBUTOR TOTAL", "DEALER TOTAL"], headerRow);
   const msrpTotal = findLabeledNumber(sheetData, ["MSRP TOTAL"], headerRow);
 

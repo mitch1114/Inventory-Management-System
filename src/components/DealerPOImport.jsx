@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
-import { LOCKING, COL_ALIASES } from "../lib/constants";
+import { LOCKING, COL_ALIASES, CHANNELS } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow } from "../lib/utils";
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
@@ -94,6 +94,10 @@ export default function DealerPOImport({ data, setData, onClose }) {
   const [importMode, setImportMode] = useState(""); // "csv" | "acc"
   const [autoMapped, setAutoMapped] = useState(false); // true when columns were auto-detected
   const [orderKind, setOrderKind] = useState("regular"); // "regular" | "preorder"
+  const [channel, setChannel] = useState("dealer"); // sales channel (see CHANNELS)
+  const [requestedShipDate, setRequestedShipDate] = useState("");
+  const [specialInstructions, setSpecialInstructions] = useState("");
+  const [showOrder, setShowOrder] = useState(false); // show-order pricing discount
   const fileRef = useRef();
 
   const computedProds = useMemo(
@@ -212,6 +216,9 @@ export default function DealerPOImport({ data, setData, onClose }) {
               return;
             }
             setParsedMeta(meta);
+            setChannel(meta.fileType === "distributor" ? "distributor" : "dealer");
+            setRequestedShipDate(meta.shipDate || "");
+            setSpecialInstructions(meta.comments || "");
             setDealerInfo({
               customer: meta.customerName || "",
               poRef: meta.poNumber || "",
@@ -313,6 +320,14 @@ export default function DealerPOImport({ data, setData, onClose }) {
     setStep("review");
   };
 
+  // --- Line pricing: show orders get 10% off NEW products, 5% off the rest ----
+  const linePrice = (l) => {
+    const base = l.sellPrice || l.cost || 0;
+    if (!showOrder) return base;
+    const isNew = String(l.status || "").trim().toUpperCase() === "NEW";
+    return Math.round(base * (isNew ? 0.9 : 0.95) * 100) / 100;
+  };
+
   // --- Create the sales order ------------------------------------------------
   const doImport = () => {
     const validLines = lines.filter((l) => l.matched && l.qty > 0);
@@ -335,7 +350,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
       return {
         productId: l.productId,
         qty: l.qty,
-        price: l.sellPrice || l.cost || 0,
+        price: linePrice(l),
         qtyFilled: filled,
         qtyBackordered: bo,
       };
@@ -351,17 +366,22 @@ export default function DealerPOImport({ data, setData, onClose }) {
       customer: dealerInfo.customer || "Unknown Dealer",
       date: dealerInfo.date || todayIso(),
       fulfillmentStage: "confirmed",
-      type: isPreorder ? "preorder" : parsedMeta ? parsedMeta.fileType : "dealer",
+      type: isPreorder ? "preorder" : "standard",
+      channel,
       dealerPORef: dealerInfo.poRef || "",
+      requestedShipDate: requestedShipDate || "",
+      specialInstructions: specialInstructions || "",
       lines: orderLines,
       shipment: {},
       notes: dealerInfo.notes || "",
+      ...(showOrder ? { showOrder: true } : {}),
     };
 
     const kindLabel = isPreorder ? " as PRE-ORDER" : "";
+    const showLabel = showOrder ? " * SHOW ORDER pricing" : "";
     const desc = parsedMeta
-      ? `Imported PO ${dealerInfo.poRef || "?"} from ${dealerInfo.customer}${kindLabel} -- ${validLines.length} lines * ${fmtNum(totalUnits)} units * ${fmt(totalCost)} ${parsedMeta.fileType} cost${parsedMeta.buyerName ? " * Buyer: " + parsedMeta.buyerName : ""}`
-      : `Imported ${dealerInfo.poRef || "dealer PO"} from ${dealerInfo.customer}${kindLabel} -- ${fmtNum(totalUnits)} units`;
+      ? `Imported PO ${dealerInfo.poRef || "?"} from ${dealerInfo.customer}${kindLabel} -- ${validLines.length} lines * ${fmtNum(totalUnits)} units * ${fmt(totalCost)} ${parsedMeta.fileType} cost${parsedMeta.buyerName ? " * Buyer: " + parsedMeta.buyerName : ""}${showLabel}`
+      : `Imported ${dealerInfo.poRef || "dealer PO"} from ${dealerInfo.customer}${kindLabel} -- ${fmtNum(totalUnits)} units${showLabel}`;
 
     setData((d) => {
       const customerName = (dealerInfo.customer || "Unknown Dealer").trim();
@@ -424,6 +444,10 @@ export default function DealerPOImport({ data, setData, onClose }) {
     setLines([]);
     setError("");
     setOrderKind("regular");
+    setChannel("dealer");
+    setRequestedShipDate("");
+    setSpecialInstructions("");
+    setShowOrder(false);
     setImportMode("");
     setAutoMapped(false);
   };
@@ -436,6 +460,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
   const unmatchedLines = lines.filter((l) => !l.matched);
   const totalUnits = matchedLines.reduce((s, l) => s + l.qty, 0);
   const totalCost = matchedLines.reduce((s, l) => s + l.qty * (l.cost || 0), 0);
+  const orderValue = matchedLines.reduce((s, l) => s + l.qty * linePrice(l), 0);
 
   // ===========================================================================
   // RENDER
@@ -808,7 +833,12 @@ export default function DealerPOImport({ data, setData, onClose }) {
                 />
               </Field>
               <Field label="Ship Date">
-                <input style={{ ...IS, background: "#F8FAFC" }} value={parsedMeta.shipDate || "--"} readOnly />
+                <input
+                  style={IS}
+                  type="date"
+                  value={requestedShipDate}
+                  onChange={(e) => setRequestedShipDate(e.target.value)}
+                />
               </Field>
             </div>
 
@@ -840,6 +870,15 @@ export default function DealerPOImport({ data, setData, onClose }) {
                 style={{ ...IS, minHeight: 40, resize: "vertical", marginTop: 4 }}
                 value={dealerInfo.notes}
                 onChange={(e) => setDealerInfo((d) => ({ ...d, notes: e.target.value }))}
+              />
+            </Field>
+
+            <Field label="Special Instructions">
+              <textarea
+                style={{ ...IS, minHeight: 40, resize: "vertical", marginTop: 4 }}
+                value={specialInstructions}
+                onChange={(e) => setSpecialInstructions(e.target.value)}
+                placeholder="From the order writer's Special Instructions / Comments field"
               />
             </Field>
           </div>
@@ -1089,6 +1128,23 @@ export default function DealerPOImport({ data, setData, onClose }) {
                     placeholder="Optional"
                   />
                 </Field>
+                <Field label="Channel">
+                  <select style={SS} value={channel} onChange={(e) => setChannel(e.target.value)}>
+                    {CHANNELS.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Requested Ship Date">
+                  <input
+                    style={IS}
+                    type="date"
+                    value={requestedShipDate}
+                    onChange={(e) => setRequestedShipDate(e.target.value)}
+                  />
+                </Field>
               </div>
             </div>
           )}
@@ -1117,12 +1173,23 @@ export default function DealerPOImport({ data, setData, onClose }) {
                 <div style={{ fontSize: 12, color: "#64748B" }}>
                   <strong>Date:</strong> {fmtDate(dealerInfo.date)}
                 </div>
+                <div style={{ fontSize: 12, color: "#64748B", display: "flex", alignItems: "center", gap: 8 }}>
+                  <strong>Channel:</strong>
+                  <select
+                    style={{ ...SS, width: "auto", padding: "4px 8px", fontSize: 12 }}
+                    value={channel}
+                    onChange={(e) => setChannel(e.target.value)}
+                  >
+                    {CHANNELS.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <div style={{ fontSize: 12, color: "#64748B" }}>
-                  <strong>Type:</strong>{" "}
-                  <Badge
-                    status={parsedMeta.fileType}
-                    label={parsedMeta.fileType}
-                  />
+                  <strong>Requested Ship:</strong>{" "}
+                  {requestedShipDate ? fmtDate(requestedShipDate) : "--"}
                 </div>
               </div>
               {dealerInfo.notes && (
@@ -1137,6 +1204,21 @@ export default function DealerPOImport({ data, setData, onClose }) {
                   }}
                 >
                   <strong>Notes:</strong> {dealerInfo.notes}
+                </div>
+              )}
+              {specialInstructions && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#92400E",
+                    marginTop: 8,
+                    background: "#FFFBEB",
+                    border: "1px solid #FDE68A",
+                    padding: "8px 12px",
+                    borderRadius: 6,
+                  }}
+                >
+                  <strong>Special Instructions:</strong> {specialInstructions}
                 </div>
               )}
             </div>
@@ -1198,6 +1280,36 @@ export default function DealerPOImport({ data, setData, onClose }) {
                 </label>
               ))}
             </div>
+
+            {/* Show-order pricing discount */}
+            <label
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "flex-start",
+                cursor: "pointer",
+                marginTop: 10,
+                background: showOrder ? "#FFFBEB" : "transparent",
+                border: `1px solid ${showOrder ? "#FDE68A" : "#E2E8F0"}`,
+                borderRadius: 8,
+                padding: "8px 10px",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={showOrder}
+                onChange={(e) => setShowOrder(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>
+                  Show Order pricing
+                </span>
+                <span style={{ fontSize: 12, color: "#64748B", display: "block", marginTop: 1 }}>
+                  5% off existing products, 10% off NEW products
+                </span>
+              </span>
+            </label>
           </div>
 
           {/* Line items with availability check */}
@@ -1310,7 +1422,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
                           {bo > 0 ? bo : "--"}
                         </td>
                         <td style={{ padding: "7px 12px", textAlign: "right", color: "#475569" }}>
-                          {fmt(l.sellPrice || l.cost || 0)}
+                          {fmt(linePrice(l))}
                         </td>
                       </tr>
                     );
@@ -1333,8 +1445,11 @@ export default function DealerPOImport({ data, setData, onClose }) {
             >
               <span style={{ color: "#64748B" }}>
                 {fmtNum(totalUnits)} units &middot; {matchedLines.length} lines
+                {showOrder && (
+                  <span style={{ color: "#92400E" }}> &middot; Show Order pricing applied</span>
+                )}
               </span>
-              <span style={{ color: "#0F172A" }}>{fmt(totalCost)}</span>
+              <span style={{ color: "#0F172A" }}>{fmt(orderValue)}</span>
             </div>
           </div>
 

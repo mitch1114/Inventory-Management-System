@@ -1,6 +1,8 @@
 import { useState, useMemo, useRef } from "react";
-import { uid, fmt, fmtNum, nowIso, toCSV, dlCSV, parseCSV } from "../lib/utils";
-import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq } from "./ui";
+import { uid, fmt, fmtNum, nowIso, fmtDate, fmtTs, toCSV, dlCSV, parseCSV } from "../lib/utils";
+import { STAGE_LABEL } from "../lib/constants";
+import { isQboConnected, fetchInvoices } from "../lib/qbo";
+import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BAq } from "./ui";
 
 // --- Helpers -----------------------------------------------------------------
 const CUSTOMER_TYPES = [
@@ -12,13 +14,37 @@ const CUSTOMER_TYPES = [
 ];
 const TYPE_LABEL = Object.fromEntries(CUSTOMER_TYPES.map((t) => [t.value, t.label]));
 
+const CONTACT_ROLES = [
+  { key: "owner", label: "Owner" },
+  { key: "buyer", label: "Buyer" },
+  { key: "marketing", label: "Marketing" },
+  { key: "ops", label: "OPS" },
+  { key: "finance", label: "Finance" },
+];
+
+const blankContact = () => ({ name: "", email: "", phone: "" });
+const blankContacts = () =>
+  Object.fromEntries(CONTACT_ROLES.map((r) => [r.key, blankContact()]));
+
 const blank = () => ({
   name: "",
   type: "dealer",
   email: "",
   phone: "",
   address: "",
+  notes: "",
+  contacts: blankContacts(),
 });
+
+// Section header used in the detail modal
+const SH = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: "#64748B",
+  textTransform: "uppercase",
+  letterSpacing: "0.07em",
+  margin: "0 0 8px",
+};
 
 // --- Component ---------------------------------------------------------------
 export default function Customers({ data, setData }) {
@@ -26,7 +52,15 @@ export default function Customers({ data, setData }) {
   const [form, setForm] = useState(blank());
   const [search, setSearch] = useState("");
   const [importResult, setImportResult] = useState(null);
+  const [viewingId, setViewingId] = useState(null);
+  const [arSyncing, setArSyncing] = useState(false);
+  const [arError, setArError] = useState(null);
+  const [dealerImportMsg, setDealerImportMsg] = useState(null);
   const fileRef = useRef(null);
+  const dealerFileRef = useRef(null);
+
+  const qboConnected = isQboConnected();
+  const viewing = viewingId ? data.customers.find((c) => c.id === viewingId) : null;
 
   // Per-customer order count and lifetime value
   const stats = useMemo(() => {
@@ -57,7 +91,41 @@ export default function Customers({ data, setData }) {
     );
   }, [data.customers, search]);
 
-  // --- Open create / edit ----------------------------------------------------
+  // Last AR sync timestamp (any customer)
+  const arLastSync = useMemo(() => {
+    let latest = null;
+    data.customers.forEach((c) => {
+      if (c.openARUpdated && (!latest || c.openARUpdated > latest)) latest = c.openARUpdated;
+    });
+    return latest;
+  }, [data.customers]);
+
+  // YTD orders for the customer currently being viewed
+  const ytdOrders = useMemo(() => {
+    if (!viewing) return [];
+    const jan1 = `${new Date().getFullYear()}-01-01`;
+    const key = viewing.name.toLowerCase().trim();
+    return data.salesOrders
+      .filter(
+        (o) =>
+          (o.customer || "").toLowerCase().trim() === key && (o.date || "") >= jan1,
+      )
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [data.salesOrders, viewing]);
+
+  const ytdTotals = useMemo(() => {
+    let units = 0;
+    let revenue = 0;
+    ytdOrders.forEach((o) => {
+      o.lines.forEach((l) => {
+        units += l.qty;
+        revenue += l.qty * l.price;
+      });
+    });
+    return { orders: ytdOrders.length, units, revenue };
+  }, [ytdOrders]);
+
+  // --- Open create / edit / view ----------------------------------------------
   const openNew = () => {
     setForm(blank());
     setEditing("new");
@@ -69,9 +137,26 @@ export default function Customers({ data, setData }) {
       email: c.email || "",
       phone: c.phone || "",
       address: c.address || "",
+      notes: c.notes || "",
+      contacts: Object.fromEntries(
+        CONTACT_ROLES.map((r) => [
+          r.key,
+          { ...blankContact(), ...((c.contacts || {})[r.key] || {}) },
+        ]),
+      ),
     });
     setEditing(c);
   };
+  const openView = (c) => {
+    setDealerImportMsg(null);
+    setViewingId(c.id);
+  };
+
+  const setContact = (role, field, value) =>
+    setForm((f) => ({
+      ...f,
+      contacts: { ...f.contacts, [role]: { ...f.contacts[role], [field]: value } },
+    }));
 
   // --- Save ------------------------------------------------------------------
   const save = () => {
@@ -112,23 +197,32 @@ export default function Customers({ data, setData }) {
     setEditing(null);
   };
 
-  // --- Delete ----------------------------------------------------------------
-  const deleteCustomer = (c) => {
-    if (!confirm(`Delete customer "${c.name}"?`)) return;
-    setData((d) => ({
-      ...d,
-      customers: d.customers.filter((x) => x.id !== c.id),
-      auditLog: [
-        ...(d.auditLog || []),
-        {
-          id: uid(),
-          ts: nowIso(),
-          type: "adjustment",
-          entity: c.name,
-          description: `Deleted customer ${c.name}`,
-        },
-      ],
-    }));
+  // --- Sync open AR from QuickBooks --------------------------------------------
+  const syncAR = async () => {
+    setArSyncing(true);
+    setArError(null);
+    try {
+      const res = await fetchInvoices({ maxResults: 1000 });
+      const totals = {};
+      (res.salesOrders || []).forEach((inv) => {
+        const key = (inv.customer || "").toLowerCase().trim();
+        const bal = Number(inv.balance) || 0;
+        if (key && bal > 0) totals[key] = (totals[key] || 0) + bal;
+      });
+      const ts = nowIso();
+      setData((d) => ({
+        ...d,
+        customers: d.customers.map((c) => ({
+          ...c,
+          openAR: totals[c.name.toLowerCase().trim()] || 0,
+          openARUpdated: ts,
+        })),
+      }));
+    } catch (err) {
+      setArError(err.message || "AR sync failed");
+    } finally {
+      setArSyncing(false);
+    }
   };
 
   // --- CSV Export -------------------------------------------------------------
@@ -188,10 +282,6 @@ export default function Customers({ data, setData }) {
         });
         return;
       }
-
-      const existingNames = new Set(
-        data.customers.map((c) => c.name.toLowerCase().trim()),
-      );
 
       let added = 0;
       let skipped = 0;
@@ -265,6 +355,115 @@ export default function Customers({ data, setData }) {
     reader.readAsText(file);
   };
 
+  // --- Dealer / ship-to CSV import (distributor sub-accounts) ------------------
+  const handleDealerImport = (e) => {
+    const file = e.target.files[0];
+    if (!file || !viewing) return;
+    e.target.value = "";
+
+    const customerId = viewing.id;
+    const customerName = viewing.name;
+    const existingSubs = viewing.subAccounts || [];
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const rows = parseCSV(ev.target.result);
+      if (rows.length === 0) {
+        setDealerImportMsg({ error: "No data rows found in CSV." });
+        return;
+      }
+
+      const headers = Object.keys(rows[0]);
+      const find = (aliases) =>
+        headers.find((h) => aliases.includes(h.toLowerCase().trim())) || null;
+
+      const nameCol = find(["name", "dealer", "dealer name", "customer", "account", "account name"]);
+      const addressCol = find(["address", "street", "location", "ship to", "shipping address"]);
+      const cityCol = find(["city"]);
+      const stateCol = find(["state", "st"]);
+      const emailCol = find(["email", "e-mail", "email address"]);
+      const phoneCol = find(["phone", "phone number", "telephone", "tel"]);
+
+      if (!nameCol) {
+        setDealerImportMsg({
+          error: `Could not find a "Name" column. Found columns: ${headers.join(", ")}`,
+        });
+        return;
+      }
+
+      let added = 0;
+      let updated = 0;
+      let skipped = 0;
+      const merged = [...existingSubs];
+
+      for (const row of rows) {
+        const name = (row[nameCol] || "").trim();
+        if (!name) {
+          skipped++;
+          continue;
+        }
+
+        const address = [
+          addressCol ? (row[addressCol] || "").trim() : "",
+          cityCol ? (row[cityCol] || "").trim() : "",
+          stateCol ? (row[stateCol] || "").trim() : "",
+        ]
+          .filter(Boolean)
+          .join(", ");
+        const email = emailCol ? (row[emailCol] || "").trim() : "";
+        const phone = phoneCol ? (row[phoneCol] || "").trim() : "";
+
+        const idx = merged.findIndex(
+          (s) => s.name.toLowerCase().trim() === name.toLowerCase(),
+        );
+        if (idx !== -1) {
+          merged[idx] = {
+            ...merged[idx],
+            address: address || merged[idx].address,
+            email: email || merged[idx].email,
+            phone: phone || merged[idx].phone,
+          };
+          updated++;
+        } else {
+          merged.push({ id: uid(), name, address, email, phone });
+          added++;
+        }
+      }
+
+      const count = added + updated;
+      setData((d) => ({
+        ...d,
+        customers: d.customers.map((c) =>
+          c.id === customerId ? { ...c, subAccounts: merged } : c,
+        ),
+        auditLog: [
+          ...(d.auditLog || []),
+          {
+            id: uid(),
+            ts: nowIso(),
+            type: "adjustment",
+            entity: customerName,
+            description: `Imported ${count} dealer accounts for ${customerName}`,
+          },
+        ],
+      }));
+
+      setDealerImportMsg({
+        success: true,
+        message: `Imported ${count} dealer account${count !== 1 ? "s" : ""}: ${added} added, ${updated} updated${skipped > 0 ? `, ${skipped} skipped (no name)` : ""}`,
+      });
+    };
+    reader.readAsText(file);
+  };
+
+  // Contacts with at least one filled field, for the detail view
+  const filledContacts = viewing
+    ? CONTACT_ROLES.map((r) => ({
+        ...r,
+        contact: (viewing.contacts || {})[r.key] || blankContact(),
+      })).filter((r) => r.contact.name || r.contact.email || r.contact.phone)
+    : [];
+
   // --- Render ----------------------------------------------------------------
   return (
     <div>
@@ -283,6 +482,9 @@ export default function Customers({ data, setData }) {
           </h2>
           <p style={{ color: "#64748B", margin: "4px 0 0", fontSize: 13 }}>
             {data.customers.length} customer{data.customers.length !== 1 ? "s" : ""}
+            {arLastSync && (
+              <span style={{ color: "#94A3B8" }}> &middot; AR synced {fmtTs(arLastSync)}</span>
+            )}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -292,6 +494,11 @@ export default function Customers({ data, setData }) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          {qboConnected && (
+            <button style={BAq} onClick={syncAR} disabled={arSyncing}>
+              {arSyncing ? "Syncing AR..." : "Sync AR from QuickBooks"}
+            </button>
+          )}
           <button style={BAq} onClick={() => fileRef.current?.click()}>
             Import CSV
           </button>
@@ -310,6 +517,33 @@ export default function Customers({ data, setData }) {
           </button>
         </div>
       </div>
+
+      {/* AR sync error banner */}
+      {arError && (
+        <div
+          style={{
+            background: "#FEF2F2",
+            border: "1px solid #FECACA",
+            borderRadius: 10,
+            padding: "12px 18px",
+            marginBottom: 16,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontSize: 14,
+            color: "#DC2626",
+            fontWeight: 600,
+          }}
+        >
+          <span>AR sync failed: {arError}</span>
+          <button
+            style={{ ...BS, padding: "5px 12px", fontSize: 12 }}
+            onClick={() => setArError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Import result banner */}
       {importResult && (
@@ -340,15 +574,38 @@ export default function Customers({ data, setData }) {
 
       {/* Customer Table */}
       <Table
-        headers={["Name", "Type", "Email", "Phone", "Address", "Orders", "Lifetime Value", "Actions"]}
+        headers={["Name", "Type", "Email", "Phone", "Address", "Orders", "Lifetime Value", "Open AR", "Actions"]}
         empty={filtered.length === 0 ? "No customers found." : null}
       >
         {filtered.map((c, i) => {
           const s = stats[c.name] || { orders: 0, value: 0 };
+          const dealerCount = (c.subAccounts || []).length;
           return (
             <TR key={c.id} i={i}>
               <TD>
-                <span style={{ fontWeight: 600, color: "#0F172A" }}>{c.name}</span>
+                <span
+                  style={{ fontWeight: 600, color: "#0F172A", cursor: "pointer" }}
+                  onClick={() => openView(c)}
+                >
+                  {c.name}
+                </span>
+                {dealerCount > 0 && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      background: "#F5F3FF",
+                      color: "#6D28D9",
+                      border: "1px solid #DDD6FE",
+                      borderRadius: 20,
+                      padding: "1px 8px",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {dealerCount} dealer{dealerCount !== 1 ? "s" : ""}
+                  </span>
+                )}
               </TD>
               <TD>
                 <Badge status={c.type || "dealer"} label={TYPE_LABEL[c.type] || c.type || "Dealer"} />
@@ -366,19 +623,22 @@ export default function Customers({ data, setData }) {
               <TD mono accent="#15803D">
                 {fmt(s.value)}
               </TD>
+              <TD mono accent={c.openAR > 0 ? "#B45309" : "#64748B"}>
+                {c.openARUpdated ? fmt(c.openAR || 0) : "--"}
+              </TD>
               <TD>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    style={{ ...BS, padding: "5px 10px", fontSize: 11 }}
+                    onClick={() => openView(c)}
+                  >
+                    View
+                  </button>
                   <button
                     style={{ ...BS, padding: "5px 10px", fontSize: 11 }}
                     onClick={() => openEdit(c)}
                   >
                     Edit
-                  </button>
-                  <button
-                    style={{ ...BD, padding: "5px 10px", fontSize: 11 }}
-                    onClick={() => deleteCustomer(c)}
-                  >
-                    Delete
                   </button>
                 </div>
               </TD>
@@ -392,7 +652,7 @@ export default function Customers({ data, setData }) {
         <Modal
           title={editing === "new" ? "New Customer" : `Edit ${editing.name}`}
           onClose={() => setEditing(null)}
-          width={560}
+          width={680}
         >
           <Field label="Customer Name">
             <input
@@ -442,6 +702,53 @@ export default function Customers({ data, setData }) {
               placeholder="Street, City, State ZIP"
             />
           </Field>
+          <Field label="Notes">
+            <textarea
+              style={{ ...IS, minHeight: 60, resize: "vertical" }}
+              value={form.notes}
+              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              placeholder="Internal notes about this customer..."
+            />
+          </Field>
+
+          <Field label="Contacts">
+            <div style={{ display: "grid", gap: 6 }}>
+              {CONTACT_ROLES.map((r) => (
+                <div
+                  key={r.key}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "72px 1fr 1fr 1fr",
+                    gap: 6,
+                    alignItems: "center",
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#64748B" }}>
+                    {r.label}
+                  </span>
+                  <input
+                    style={{ ...IS, padding: "6px 8px", fontSize: 12 }}
+                    value={form.contacts[r.key].name}
+                    onChange={(e) => setContact(r.key, "name", e.target.value)}
+                    placeholder="Name"
+                  />
+                  <input
+                    style={{ ...IS, padding: "6px 8px", fontSize: 12 }}
+                    type="email"
+                    value={form.contacts[r.key].email}
+                    onChange={(e) => setContact(r.key, "email", e.target.value)}
+                    placeholder="Email"
+                  />
+                  <input
+                    style={{ ...IS, padding: "6px 8px", fontSize: 12 }}
+                    value={form.contacts[r.key].phone}
+                    onChange={(e) => setContact(r.key, "phone", e.target.value)}
+                    placeholder="Phone"
+                  />
+                </div>
+              ))}
+            </div>
+          </Field>
 
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
             <button style={BS} onClick={() => setEditing(null)}>
@@ -449,6 +756,254 @@ export default function Customers({ data, setData }) {
             </button>
             <button style={BP} onClick={save} disabled={!form.name.trim()}>
               {editing === "new" ? "Add Customer" : "Save Changes"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Customer Detail Modal */}
+      {viewing && (
+        <Modal title={viewing.name} onClose={() => setViewingId(null)} width={760}>
+          {/* Customer info */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "10px 18px",
+              marginBottom: 18,
+            }}
+          >
+            <div>
+              <div style={SH}>Type</div>
+              <Badge
+                status={viewing.type || "dealer"}
+                label={TYPE_LABEL[viewing.type] || viewing.type || "Dealer"}
+              />
+            </div>
+            <div>
+              <div style={SH}>Open AR</div>
+              <span style={{ fontFamily: "monospace", fontWeight: 600, fontSize: 13, color: viewing.openAR > 0 ? "#B45309" : "#374151" }}>
+                {viewing.openARUpdated ? fmt(viewing.openAR || 0) : "--"}
+              </span>
+              {viewing.openARUpdated && (
+                <span style={{ fontSize: 11, color: "#94A3B8", marginLeft: 8 }}>
+                  synced {fmtTs(viewing.openARUpdated)}
+                </span>
+              )}
+            </div>
+            <div>
+              <div style={SH}>Email</div>
+              <span style={{ fontSize: 13, color: "#6D28D9" }}>{viewing.email || "--"}</span>
+            </div>
+            <div>
+              <div style={SH}>Phone</div>
+              <span style={{ fontSize: 13 }}>{viewing.phone || "--"}</span>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <div style={SH}>Address</div>
+              <span style={{ fontSize: 13, color: "#64748B" }}>{viewing.address || "--"}</span>
+            </div>
+          </div>
+
+          {/* Notes */}
+          {viewing.notes && (
+            <div style={{ marginBottom: 18 }}>
+              <div style={SH}>Notes</div>
+              <div
+                style={{
+                  background: "#F8FAFC",
+                  border: "1px solid #E2E8F0",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  fontSize: 13,
+                  color: "#374151",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {viewing.notes}
+              </div>
+            </div>
+          )}
+
+          {/* Contacts */}
+          {filledContacts.length > 0 && (
+            <div style={{ marginBottom: 18 }}>
+              <div style={SH}>Contacts</div>
+              <div
+                style={{
+                  border: "1px solid #E2E8F0",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                }}
+              >
+                {filledContacts.map((r, idx) => (
+                  <div
+                    key={r.key}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "90px 1fr 1fr 1fr",
+                      gap: 8,
+                      padding: "8px 12px",
+                      fontSize: 12,
+                      background: idx % 2 === 0 ? "transparent" : "#FAFAFA",
+                      borderTop: idx > 0 ? "1px solid #F1F5F9" : "none",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span style={{ fontWeight: 700, color: "#64748B" }}>{r.label}</span>
+                    <span style={{ fontWeight: 600, color: "#0F172A" }}>
+                      {r.contact.name || "--"}
+                    </span>
+                    <span style={{ color: "#6D28D9" }}>{r.contact.email || "--"}</span>
+                    <span style={{ color: "#374151" }}>{r.contact.phone || "--"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Dealers / Ship-To Accounts */}
+          <div style={{ marginBottom: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
+              }}
+            >
+              <div style={{ ...SH, margin: 0 }}>
+                Dealers / Ship-To Accounts ({(viewing.subAccounts || []).length})
+              </div>
+              <button
+                style={{ ...BAq, padding: "5px 12px", fontSize: 12 }}
+                onClick={() => dealerFileRef.current?.click()}
+              >
+                Import CSV
+              </button>
+              <input
+                ref={dealerFileRef}
+                type="file"
+                accept=".csv"
+                style={{ display: "none" }}
+                onChange={handleDealerImport}
+              />
+            </div>
+            {dealerImportMsg && (
+              <div
+                style={{
+                  background: dealerImportMsg.success ? "#F0FDF4" : "#FEF2F2",
+                  border: `1px solid ${dealerImportMsg.success ? "#BBF7D0" : "#FECACA"}`,
+                  borderRadius: 8,
+                  padding: "8px 12px",
+                  marginBottom: 8,
+                  fontSize: 12,
+                  color: dealerImportMsg.success ? "#15803D" : "#DC2626",
+                  fontWeight: 600,
+                }}
+              >
+                {dealerImportMsg.message || dealerImportMsg.error}
+              </div>
+            )}
+            {(viewing.subAccounts || []).length === 0 ? (
+              <div style={{ fontSize: 12, color: "#94A3B8" }}>
+                No dealer accounts on file. Import a CSV from the distributor to add them.
+              </div>
+            ) : (
+              <div
+                style={{
+                  border: "1px solid #E2E8F0",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                  maxHeight: 220,
+                  overflowY: "auto",
+                }}
+              >
+                {(viewing.subAccounts || []).map((s, idx) => (
+                  <div
+                    key={s.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      padding: "7px 12px",
+                      fontSize: 12,
+                      background: idx % 2 === 0 ? "transparent" : "#FAFAFA",
+                      borderTop: idx > 0 ? "1px solid #F1F5F9" : "none",
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, color: "#0F172A" }}>{s.name}</span>
+                    <span style={{ color: "#64748B", textAlign: "right" }}>
+                      {s.address || "--"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Orders YTD */}
+          <div>
+            <div style={SH}>Orders YTD ({new Date().getFullYear()})</div>
+            <div
+              style={{
+                display: "flex",
+                gap: 18,
+                marginBottom: 10,
+                fontSize: 13,
+                color: "#374151",
+              }}
+            >
+              <span>
+                <span style={{ fontWeight: 700 }}>{fmtNum(ytdTotals.orders)}</span> order
+                {ytdTotals.orders !== 1 ? "s" : ""}
+              </span>
+              <span>
+                <span style={{ fontWeight: 700 }}>{fmtNum(ytdTotals.units)}</span> units
+              </span>
+              <span style={{ fontFamily: "monospace", fontWeight: 600, color: "#15803D" }}>
+                {fmt(ytdTotals.revenue)}
+              </span>
+            </div>
+            <Table
+              headers={["Order #", "Date", "Stage", "Units", "Value"]}
+              empty={ytdOrders.length === 0 ? "No orders this year." : null}
+            >
+              {ytdOrders.map((o, i) => {
+                const units = o.lines.reduce((s, l) => s + l.qty, 0);
+                const value = o.lines.reduce((s, l) => s + l.qty * l.price, 0);
+                return (
+                  <TR key={o.id} i={i}>
+                    <TD mono>{o.orderNum}</TD>
+                    <TD>{fmtDate(o.date)}</TD>
+                    <TD>
+                      <Badge
+                        status={o.fulfillmentStage}
+                        label={STAGE_LABEL[o.fulfillmentStage] || o.fulfillmentStage}
+                      />
+                    </TD>
+                    <TD>{fmtNum(units)}</TD>
+                    <TD mono accent="#15803D">
+                      {fmt(value)}
+                    </TD>
+                  </TR>
+                );
+              })}
+            </Table>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+            <button
+              style={BS}
+              onClick={() => {
+                setViewingId(null);
+                openEdit(viewing);
+              }}
+            >
+              Edit Customer
+            </button>
+            <button style={BP} onClick={() => setViewingId(null)}>
+              Close
             </button>
           </div>
         </Modal>
