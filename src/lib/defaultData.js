@@ -11,9 +11,31 @@ export const defaultData = {
   counters: { so: 0, po: 0 },
 };
 
-// Full demo catalog for exploring the app before connecting real data.
-// Loaded via Settings > "Load Demo Data".
-export const demoData = {
+// ---------------------------------------------------------------------------
+// Demo data -- full sample catalog for exploring the app before connecting
+// real data. Loaded via Settings > "Load Demo Data".
+//
+// Dates are generated relative to today so the date-aware views (Dashboard
+// "Last 7 Days", Demand Planning velocity windows, Reports monthly chart)
+// always have live data to show. Call makeDemoData() to get a fresh copy.
+// ---------------------------------------------------------------------------
+
+// Local date string (yyyy-mm-dd) offset from today by N days.
+function d(offsetDays) {
+  const t = new Date();
+  t.setDate(t.getDate() + offsetDays);
+  const m = String(t.getMonth() + 1).padStart(2, "0");
+  const day = String(t.getDate()).padStart(2, "0");
+  return `${t.getFullYear()}-${m}-${day}`;
+}
+
+// Audit-log timestamp offset from today by N days at a given time of day.
+function ts(offsetDays, time) {
+  return `${d(offsetDays)}T${time}:00Z`;
+}
+
+export function makeDemoData() {
+  return {
   products: [
     // -- Spinning Reels
     { id: "p-lx1bx", sku: "LX-1000-S-SLVR-BX", name: "ACC Crappie Legacy X - 1000 Size Spinning Reel (Box)", category: "Spinning Reels", costPrice: 40.67, sellPrice: 79.99, onHand: 60, reorderPoint: 12, reorderQty: 36, supplier: "s1" },
@@ -81,82 +103,82 @@ export const demoData = {
   ],
   salesOrders: [
     {
-      id: "so1", orderNum: "SO-0001", customer: "Tackle Warehouse", date: "2026-01-08",
+      id: "so1", orderNum: "SO-0001", customer: "Tackle Warehouse", date: d(-25),
       fulfillmentStage: "shipped", type: "standard", dealerPORef: "TW-2026-0011",
       lines: [
-        { productId: "p-js102", qty: 12, price: 46.20, qtyFilled: 12, qtyBackordered: 0 },
-        { productId: "p-js102sg", qty: 12, price: 50.82, qtyFilled: 12, qtyBackordered: 0 },
-        { productId: "p-js112", qty: 12, price: 46.20, qtyFilled: 12, qtyBackordered: 0 },
-        { productId: "p-df4clr", qty: 48, price: 4.68, qtyFilled: 48, qtyBackordered: 0 },
-        { productId: "p-df4hv", qty: 48, price: 4.68, qtyFilled: 48, qtyBackordered: 0 },
+        { productId: "p-js102", qty: 12, price: 99.99, qtyFilled: 12, qtyBackordered: 0 },
+        { productId: "p-js102sg", qty: 12, price: 109.99, qtyFilled: 12, qtyBackordered: 0 },
+        { productId: "p-js112", qty: 12, price: 99.99, qtyFilled: 12, qtyBackordered: 0 },
+        { productId: "p-df4clr", qty: 48, price: 9.99, qtyFilled: 48, qtyBackordered: 0 },
+        { productId: "p-df4hv", qty: 48, price: 9.99, qtyFilled: 48, qtyBackordered: 0 },
       ],
-      shipment: { carrier: "UPS", trackingNum: "1Z999AA10123456780", shipDate: "2026-01-11" },
+      shipment: { carrier: "UPS", trackingNum: "1Z999AA10123456780", shipDate: d(-22) },
       notes: "",
     },
     {
-      id: "so2", orderNum: "SO-0002", customer: "Bass Pro Shops", date: "2026-02-03",
+      id: "so2", orderNum: "SO-0002", customer: "Bass Pro Shops", date: d(-14),
       fulfillmentStage: "picked", type: "standard", dealerPORef: "BPS-55021",
       lines: [
-        { productId: "p-lx1bx", qty: 24, price: 40.67, qtyFilled: 24, qtyBackordered: 0 },
-        { productId: "p-lx1cl", qty: 24, price: 40.67, qtyFilled: 24, qtyBackordered: 0 },
-        { productId: "p-sps82sg", qty: 18, price: 50.82, qtyFilled: 18, qtyBackordered: 0 },
+        { productId: "p-lx1bx", qty: 24, price: 79.99, qtyFilled: 24, qtyBackordered: 0 },
+        { productId: "p-lx1cl", qty: 24, price: 79.99, qtyFilled: 24, qtyBackordered: 0 },
+        { productId: "p-sps82sg", qty: 18, price: 109.99, qtyFilled: 18, qtyBackordered: 0 },
       ],
       shipment: {}, notes: "Staged in bay 2",
     },
     {
-      id: "so3", orderNum: "SO-0003", customer: "Academy Sports", date: "2026-02-12",
+      id: "so3", orderNum: "SO-0003", customer: "Academy Sports", date: d(-8),
       fulfillmentStage: "booked", type: "standard", dealerPORef: "ACS-91002",
       lines: [
-        { productId: "p-js122", qty: 12, price: 53.13, qtyFilled: 12, qtyBackordered: 0 },
-        { productId: "p-js132", qty: 12, price: 53.13, qtyFilled: 12, qtyBackordered: 0 },
-        { productId: "p-js132sg", qty: 6, price: 57.75, qtyFilled: 6, qtyBackordered: 0 },
-        { productId: "p-sx8", qty: 24, price: 14.04, qtyFilled: 24, qtyBackordered: 0 },
+        { productId: "p-js122", qty: 12, price: 114.99, qtyFilled: 12, qtyBackordered: 0 },
+        { productId: "p-js132", qty: 12, price: 114.99, qtyFilled: 12, qtyBackordered: 0 },
+        { productId: "p-js132sg", qty: 6, price: 124.99, qtyFilled: 6, qtyBackordered: 0 },
+        { productId: "p-sx8", qty: 24, price: 29.99, qtyFilled: 24, qtyBackordered: 0 },
       ],
-      shipment: { carrier: "FedEx", trackingNum: "", shipDate: "2026-02-19" },
+      shipment: { carrier: "FedEx", trackingNum: "", shipDate: d(2) },
       notes: "",
     },
     {
-      id: "so4", orderNum: "SO-0004", customer: "Fisherman's Corner", date: "2026-02-20",
+      id: "so4", orderNum: "SO-0004", customer: "Fisherman's Corner", date: d(-5),
       fulfillmentStage: "confirmed", type: "preorder", dealerPORef: "FSC-2026-007",
       lines: [
-        { productId: "p-js112sg", qty: 6, price: 50.82, qtyFilled: 0, qtyBackordered: 6 },
-        { productId: "p-js122sg", qty: 6, price: 57.75, qtyFilled: 0, qtyBackordered: 6 },
+        { productId: "p-js112sg", qty: 6, price: 109.99, qtyFilled: 0, qtyBackordered: 6 },
+        { productId: "p-js122sg", qty: 6, price: 124.99, qtyFilled: 0, qtyBackordered: 6 },
       ],
       shipment: {}, notes: "Awaiting Super Grip restock -- tied to PO-0001",
     },
     {
       id: "so5", orderNum: "SO-0005",
-      customer: "A-1 Bait and Tackle Co.", date: "2026-02-24",
+      customer: "A-1 Bait and Tackle Co.", date: d(-2),
       fulfillmentStage: "confirmed", type: "distributor",
       dealerPORef: "GW2426",
       notes: "Buyer: Gracie Watson | a-1bait75662@gmail.com | Ship To: 1114 Southport Road, Kilgore, TX 75662",
       lines: [
-        { productId: "p-lx1bx", qty: 10, price: 40.67, qtyFilled: 10, qtyBackordered: 0 },
-        { productId: "p-lx1cl", qty: 5, price: 40.67, qtyFilled: 5, qtyBackordered: 0 },
-        { productId: "p-df4clr", qty: 20, price: 4.68, qtyFilled: 20, qtyBackordered: 0 },
-        { productId: "p-df6clr", qty: 20, price: 4.68, qtyFilled: 20, qtyBackordered: 0 },
-        { productId: "p-df8clr", qty: 20, price: 4.68, qtyFilled: 20, qtyBackordered: 0 },
-        { productId: "p-df10clr", qty: 20, price: 4.68, qtyFilled: 20, qtyBackordered: 0 },
-        { productId: "p-df4hv", qty: 20, price: 4.68, qtyFilled: 20, qtyBackordered: 0 },
-        { productId: "p-df6hv", qty: 20, price: 4.68, qtyFilled: 20, qtyBackordered: 0 },
-        { productId: "p-df8hv", qty: 20, price: 4.68, qtyFilled: 20, qtyBackordered: 0 },
-        { productId: "p-df10hv", qty: 20, price: 4.68, qtyFilled: 20, qtyBackordered: 0 },
-        { productId: "p-sps82sg", qty: 12, price: 50.82, qtyFilled: 12, qtyBackordered: 0 },
-        { productId: "p-js102", qty: 6, price: 46.20, qtyFilled: 6, qtyBackordered: 0 },
-        { productId: "p-js102sg", qty: 6, price: 50.82, qtyFilled: 6, qtyBackordered: 0 },
-        { productId: "p-js112", qty: 6, price: 46.20, qtyFilled: 6, qtyBackordered: 0 },
-        { productId: "p-js112sg", qty: 6, price: 50.82, qtyFilled: 6, qtyBackordered: 0 },
-        { productId: "p-js122", qty: 6, price: 53.13, qtyFilled: 6, qtyBackordered: 0 },
-        { productId: "p-js132", qty: 6, price: 53.13, qtyFilled: 6, qtyBackordered: 0 },
-        { productId: "p-js132sg", qty: 6, price: 57.75, qtyFilled: 6, qtyBackordered: 0 },
+        { productId: "p-lx1bx", qty: 10, price: 79.99, qtyFilled: 10, qtyBackordered: 0 },
+        { productId: "p-lx1cl", qty: 5, price: 79.99, qtyFilled: 5, qtyBackordered: 0 },
+        { productId: "p-df4clr", qty: 20, price: 9.99, qtyFilled: 20, qtyBackordered: 0 },
+        { productId: "p-df6clr", qty: 20, price: 9.99, qtyFilled: 20, qtyBackordered: 0 },
+        { productId: "p-df8clr", qty: 20, price: 9.99, qtyFilled: 20, qtyBackordered: 0 },
+        { productId: "p-df10clr", qty: 20, price: 9.99, qtyFilled: 20, qtyBackordered: 0 },
+        { productId: "p-df4hv", qty: 20, price: 9.99, qtyFilled: 20, qtyBackordered: 0 },
+        { productId: "p-df6hv", qty: 20, price: 9.99, qtyFilled: 20, qtyBackordered: 0 },
+        { productId: "p-df8hv", qty: 20, price: 9.99, qtyFilled: 20, qtyBackordered: 0 },
+        { productId: "p-df10hv", qty: 20, price: 9.99, qtyFilled: 20, qtyBackordered: 0 },
+        { productId: "p-sps82sg", qty: 12, price: 109.99, qtyFilled: 12, qtyBackordered: 0 },
+        { productId: "p-js102", qty: 6, price: 99.99, qtyFilled: 6, qtyBackordered: 0 },
+        { productId: "p-js102sg", qty: 6, price: 109.99, qtyFilled: 6, qtyBackordered: 0 },
+        { productId: "p-js112", qty: 6, price: 99.99, qtyFilled: 6, qtyBackordered: 0 },
+        { productId: "p-js112sg", qty: 6, price: 109.99, qtyFilled: 6, qtyBackordered: 0 },
+        { productId: "p-js122", qty: 6, price: 114.99, qtyFilled: 6, qtyBackordered: 0 },
+        { productId: "p-js132", qty: 6, price: 114.99, qtyFilled: 6, qtyBackordered: 0 },
+        { productId: "p-js132sg", qty: 6, price: 124.99, qtyFilled: 6, qtyBackordered: 0 },
       ],
       shipment: {},
     },
   ],
   purchaseOrders: [
     {
-      id: "po1", orderNum: "PO-0001", supplierId: "s1", date: "2026-02-10",
-      expectedDate: "2026-03-26", status: "ordered",
+      id: "po1", orderNum: "PO-0001", supplierId: "s1", date: d(-10),
+      expectedDate: d(35), status: "ordered",
       lines: [
         { productId: "p-js112sg", qty: 36, cost: 50.82 },
         { productId: "p-js122sg", qty: 72, cost: 57.75 },
@@ -174,14 +196,15 @@ export const demoData = {
     { id: "c5", name: "Fisherman's Corner", type: "dealer", email: "orders@fscorner.com", phone: "555-2201", address: "Memphis, TN" },
   ],
   auditLog: [
-    { id: "a1", ts: "2026-01-08T08:30:00Z", type: "dealer-import", entity: "SO-0001", description: "Imported TW-2026-0011 from Tackle Warehouse -- 36 Jiggin' Stix, 96 DualFlex Line" },
-    { id: "a2", ts: "2026-01-11T13:00:00Z", type: "shipped-log", entity: "SO-0001", description: "Shipped SO-0001 -> Tackle Warehouse * UPS 1Z999AA10123456780" },
-    { id: "a3", ts: "2026-02-03T09:15:00Z", type: "dealer-import", entity: "SO-0002", description: "Imported BPS-55021 from Bass Pro Shops -- Legacy X Reels x48, Super Grip Spinnin' Stix x18" },
-    { id: "a4", ts: "2026-02-06T10:00:00Z", type: "stage-advance", entity: "SO-0002", description: "SO-0002 advanced to Picked & Packed -- Bass Pro Shops" },
-    { id: "a5", ts: "2026-02-12T14:20:00Z", type: "dealer-import", entity: "SO-0003", description: "Imported ACS-91002 from Academy Sports -- Jiggin' Stix x30, SmoothX Braid x24" },
-    { id: "a6", ts: "2026-02-15T09:45:00Z", type: "stage-advance", entity: "SO-0003", description: "SO-0003 advanced to Shipment Booked -- Academy Sports * FedEx est. Feb 19" },
-    { id: "a7", ts: "2026-02-20T11:30:00Z", type: "dealer-import", entity: "SO-0004", description: "Imported FSC-2026-007 from Fisherman's Corner -- 12 units on backorder (Super Grip)" },
-    { id: "a8", ts: "2026-02-24T09:12:00Z", type: "dealer-import", entity: "SO-0005", description: "Imported PO GW2426 from A-1 Bait and Tackle Co. -- 18 lines * 229 units * $4,116.99 dist cost * Buyer: Gracie Watson" },
+    { id: "a1", ts: ts(-25, "08:30"), type: "dealer-import", entity: "SO-0001", description: "Imported TW-2026-0011 from Tackle Warehouse -- 36 Jiggin' Stix, 96 DualFlex Line" },
+    { id: "a2", ts: ts(-22, "13:00"), type: "shipped-log", entity: "SO-0001", description: "Shipped SO-0001 -> Tackle Warehouse * UPS 1Z999AA10123456780" },
+    { id: "a3", ts: ts(-14, "09:15"), type: "dealer-import", entity: "SO-0002", description: "Imported BPS-55021 from Bass Pro Shops -- Legacy X Reels x48, Super Grip Spinnin' Stix x18" },
+    { id: "a4", ts: ts(-11, "10:00"), type: "stage-advance", entity: "SO-0002", description: "SO-0002 advanced to Picked & Packed -- Bass Pro Shops" },
+    { id: "a5", ts: ts(-8, "14:20"), type: "dealer-import", entity: "SO-0003", description: "Imported ACS-91002 from Academy Sports -- Jiggin' Stix x30, SmoothX Braid x24" },
+    { id: "a6", ts: ts(-6, "09:45"), type: "stage-advance", entity: "SO-0003", description: "SO-0003 advanced to Shipment Booked -- Academy Sports * FedEx" },
+    { id: "a7", ts: ts(-5, "11:30"), type: "dealer-import", entity: "SO-0004", description: "Imported FSC-2026-007 from Fisherman's Corner -- 12 units on backorder (Super Grip)" },
+    { id: "a8", ts: ts(-2, "09:12"), type: "dealer-import", entity: "SO-0005", description: "Imported PO GW2426 from A-1 Bait and Tackle Co. -- 18 lines * 229 units * $8,767.71 * Buyer: Gracie Watson" },
   ],
   counters: { so: 5, po: 1 },
-};
+  };
+}

@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { STAGES, STAGE_LABEL, LOCKING } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
 import { fmt, fmtNum, fmtTs } from "../lib/utils";
 import { Badge } from "./ui";
 
 export default function Dashboard({ data }) {
+  const [pipelineWindow, setPipelineWindow] = useState("all"); // "all" | "7d"
   const computedProds = useMemo(
     () => computeInventory(data.products, data.salesOrders),
     [data.products, data.salesOrders],
@@ -146,13 +147,36 @@ export default function Dashboard({ data }) {
           <div style={{ fontWeight: 700, color: "#334155", fontSize: 13 }}>
             Pipeline Status
           </div>
-          <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600 }}>Last 7 Days</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {[["all", "All Time"], ["7d", "Last 7 Days"]].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setPipelineWindow(key)}
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: "3px 10px",
+                  borderRadius: 999,
+                  border: "1px solid",
+                  borderColor: pipelineWindow === key ? "#C7D2FE" : "#E2E8F0",
+                  background: pipelineWindow === key ? "#EEF2FF" : "#FFFFFF",
+                  color: pipelineWindow === key ? "#4338CA" : "#94A3B8",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
           {STAGES.map((s) => {
             const col = { confirmed: "#3B82F6", picked: "#EAB308", booked: "#06B6D4", shipped: "#10B981" }[s];
             const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-            const orders = salesOrders.filter((o) => o.fulfillmentStage === s && o.date >= cutoff);
+            const orders = salesOrders.filter(
+              (o) => o.fulfillmentStage === s && (pipelineWindow === "all" || o.date >= cutoff),
+            );
             const units = orders.reduce(
               (sum, o) =>
                 sum + o.lines.reduce((ls, l) => ls + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0),

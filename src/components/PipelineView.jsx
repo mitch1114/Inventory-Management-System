@@ -32,6 +32,7 @@ const PICK_VERIFY_HELP = [
 
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
+  const [showInventory, setShowInventory] = useState(false); // live-inventory table collapsed by default
   const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso() });
   const [pickQtys, setPickQtys] = useState([]); // [{productId, qtyFilled}] for pick confirmation
   const [ssPushing, setSsPushing] = useState(false); // ShipStation push in progress
@@ -386,103 +387,6 @@ export default function PipelineView({ data, setData }) {
         </span>
       </div>
 
-      {/* Live inventory strip */}
-      <div
-        style={{
-          background: "#FFFFFF",
-          border: "1px solid #E2E8F0",
-          borderRadius: 12,
-          padding: "14px 18px",
-          marginBottom: 20,
-          overflowX: "auto",
-        }}
-      >
-        <div
-          style={{
-            fontSize: 11,
-            fontWeight: 700,
-            color: "#64748B",
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            marginBottom: 12,
-          }}
-        >
-          Live Inventory &mdash; Available to Promise
-        </div>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
-          <thead>
-            <tr>
-              {["SKU", "Product", "On Hand", "Locked", "Backordered", "Available"].map((h) => (
-                <th
-                  key={h}
-                  style={{
-                    padding: "6px 12px",
-                    textAlign: "left",
-                    fontSize: 10,
-                    fontWeight: 700,
-                    color: "#64748B",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {computedProds.map((p) => (
-              <tr key={p.id} style={{ borderTop: "1px solid #F1F5F9" }}>
-                <td style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 11, color: "#64748B" }}>
-                  {p.sku}
-                </td>
-                <td style={{ padding: "8px 12px", fontSize: 13, color: "#334155", fontWeight: 500 }}>
-                  {p.name}
-                </td>
-                <td style={{ padding: "8px 12px", fontSize: 14, color: "#0F172A", fontWeight: 700 }}>
-                  {fmtNum(p.onHand)}
-                </td>
-                <td
-                  style={{
-                    padding: "8px 12px",
-                    fontSize: 13,
-                    color: p.locked > 0 ? "#EAB308" : "#64748B",
-                    fontWeight: p.locked > 0 ? 700 : 400,
-                  }}
-                >
-                  {p.locked > 0 ? `-${fmtNum(p.locked)}` : "--"}
-                </td>
-                <td
-                  style={{
-                    padding: "8px 12px",
-                    fontSize: 13,
-                    color: p.backordered > 0 ? "#F97316" : "#64748B",
-                    fontWeight: p.backordered > 0 ? 700 : 400,
-                  }}
-                >
-                  {p.backordered > 0 ? fmtNum(p.backordered) : "--"}
-                </td>
-                <td style={{ padding: "8px 12px" }}>
-                  <span
-                    style={{
-                      background: p.available === 0 ? "#FEF2F2" : p.available <= p.reorderPoint ? "#FEFCE8" : "#F0FDF4",
-                      color: p.available === 0 ? "#B91C1C" : p.available <= p.reorderPoint ? "#854D0E" : "#15803D",
-                      border: `1px solid ${p.available === 0 ? "#FECACA" : p.available <= p.reorderPoint ? "#FDE68A" : "#BBF7D0"}`,
-                      borderRadius: 20,
-                      padding: "3px 14px",
-                      fontSize: 14,
-                      fontWeight: 800,
-                      display: "inline-block",
-                    }}
-                  >
-                    {fmtNum(p.available)}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
       {/* Kanban columns */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
         {STAGES.map((stage) => {
@@ -546,10 +450,10 @@ export default function PipelineView({ data, setData }) {
                   </div>
                 )}
                 {orders.map((o) => {
-                  const total = o.lines.reduce(
-                    (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty) * l.price,
-                    0,
-                  );
+                  // Ordered totals (not filled) so fully-backordered orders don't
+                  // display as "0 units / $0.00" on the card.
+                  const total = o.lines.reduce((s, l) => s + l.qty * l.price, 0);
+                  const orderedUnits = o.lines.reduce((s, l) => s + l.qty, 0);
                   const hasBO = o.lines.some(
                     (l) => (l.qtyBackordered != null ? l.qtyBackordered : 0) > 0,
                   );
@@ -580,9 +484,7 @@ export default function PipelineView({ data, setData }) {
                         </div>
                       )}
                       <div style={{ fontSize: 11, color: "#64748B", marginBottom: 6 }}>
-                        {fmtDate(o.date)} &middot;{" "}
-                        {o.lines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0)}{" "}
-                        units &middot; {fmt(total)}
+                        {fmtDate(o.date)} &middot; {orderedUnits} units &middot; {fmt(total)}
                       </div>
                       {LOCKING.has(stage) && (
                         <div
@@ -667,6 +569,118 @@ export default function PipelineView({ data, setData }) {
             </div>
           );
         })}
+      </div>
+
+      {/* Live inventory strip -- collapsed by default so the kanban stays front and center */}
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 12,
+          padding: "14px 18px",
+          marginTop: 20,
+          overflowX: "auto",
+        }}
+      >
+        <button
+          onClick={() => setShowInventory((v) => !v)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            background: "none",
+            border: "none",
+            padding: 0,
+            cursor: "pointer",
+            fontFamily: "inherit",
+            fontSize: 11,
+            fontWeight: 700,
+            color: "#64748B",
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+          }}
+        >
+          <span>{showInventory ? "▾" : "▸"}</span>
+          <span>Live Inventory &mdash; Available to Promise</span>
+          <span style={{ marginLeft: "auto", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}>
+            {computedProds.length} products
+          </span>
+        </button>
+        {showInventory && (
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560, marginTop: 12 }}>
+          <thead>
+            <tr>
+              {["SKU", "Product", "On Hand", "Locked", "Backordered", "Available"].map((h) => (
+                <th
+                  key={h}
+                  style={{
+                    padding: "6px 12px",
+                    textAlign: "left",
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: "#64748B",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {computedProds.map((p) => (
+              <tr key={p.id} style={{ borderTop: "1px solid #F1F5F9" }}>
+                <td style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 11, color: "#64748B" }}>
+                  {p.sku}
+                </td>
+                <td style={{ padding: "8px 12px", fontSize: 13, color: "#334155", fontWeight: 500 }}>
+                  {p.name}
+                </td>
+                <td style={{ padding: "8px 12px", fontSize: 14, color: "#0F172A", fontWeight: 700 }}>
+                  {fmtNum(p.onHand)}
+                </td>
+                <td
+                  style={{
+                    padding: "8px 12px",
+                    fontSize: 13,
+                    color: p.locked > 0 ? "#EAB308" : "#64748B",
+                    fontWeight: p.locked > 0 ? 700 : 400,
+                  }}
+                >
+                  {p.locked > 0 ? `-${fmtNum(p.locked)}` : "--"}
+                </td>
+                <td
+                  style={{
+                    padding: "8px 12px",
+                    fontSize: 13,
+                    color: p.backordered > 0 ? "#F97316" : "#64748B",
+                    fontWeight: p.backordered > 0 ? 700 : 400,
+                  }}
+                >
+                  {p.backordered > 0 ? fmtNum(p.backordered) : "--"}
+                </td>
+                <td style={{ padding: "8px 12px" }}>
+                  <span
+                    style={{
+                      background: p.available === 0 ? "#FEF2F2" : p.available <= p.reorderPoint ? "#FEFCE8" : "#F0FDF4",
+                      color: p.available === 0 ? "#B91C1C" : p.available <= p.reorderPoint ? "#854D0E" : "#15803D",
+                      border: `1px solid ${p.available === 0 ? "#FECACA" : p.available <= p.reorderPoint ? "#FDE68A" : "#BBF7D0"}`,
+                      borderRadius: 20,
+                      padding: "3px 14px",
+                      fontSize: 14,
+                      fontWeight: 800,
+                      display: "inline-block",
+                    }}
+                  >
+                    {fmtNum(p.available)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        )}
       </div>
 
       {advModal && (
