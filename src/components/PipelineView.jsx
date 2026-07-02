@@ -6,6 +6,7 @@ import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
+import { buildScanIndex, matchScan, SCANNER_CONFIG, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { sendShippedEmail } from "../lib/notify";
 import HelpPanel from "./HelpPanel";
 
@@ -57,14 +58,7 @@ export default function PipelineView({ data, setData }) {
     () => Object.fromEntries(data.products.map((p) => [p.id, p])),
     [data.products],
   );
-  const skuToProdId = useMemo(() => {
-    const m = {};
-    data.products.forEach((p) => {
-      m[p.sku.toLowerCase()] = p.id;
-      m[p.sku.toLowerCase().replace(/[-\s]/g, "")] = p.id;
-    });
-    return m;
-  }, [data.products]);
+  const skuToProdId = useMemo(() => buildScanIndex(data.products), [data.products]);
   const stageOrders = useMemo(() => {
     const m = {};
     STAGES.forEach((s) => {
@@ -98,19 +92,18 @@ export default function PipelineView({ data, setData }) {
   const startPickScanner = useCallback(async () => {
     setPickScanError(null);
     setPickScanning(true);
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForElement(pickScannerDivId);
 
     const scanner = new Html5Qrcode(pickScannerDivId);
     pickScannerRef.current = scanner;
 
     try {
       await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 280, height: 100 }, aspectRatio: 2.0 },
+        CAMERA_CONSTRAINTS,
+        SCANNER_CONFIG,
         (decodedText) => {
           // Look up the scanned barcode
-          const normalized = decodedText.toLowerCase().replace(/[-\s]/g, "");
-          const productId = skuToProdId[decodedText.toLowerCase()] || skuToProdId[normalized];
+          const productId = matchScan(skuToProdId, decodedText);
 
           if (!productId) {
             setPickLastScan({ code: decodedText, matched: false, reason: "Unknown product" });

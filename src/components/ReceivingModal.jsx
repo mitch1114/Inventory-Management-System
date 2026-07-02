@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { autoAllocate } from "../lib/inventory";
 import { uid, fmt, fmtNum, nowIso } from "../lib/utils";
+import { buildScanIndex, matchScan, SCANNER_CONFIG, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { Modal, Field, Badge, IS, SS, BP, BS, BD, BG } from "./ui";
 
 // --- Reason codes for variances ------------------------------------------------
@@ -46,16 +47,8 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
     [data.suppliers],
   );
 
-  // Build SKU -> productId lookup for barcode scanning
-  const skuMap = useMemo(() => {
-    const m = {};
-    data.products.forEach((p) => {
-      m[p.sku.toLowerCase()] = p.id;
-      // Also index without dashes/spaces for fuzzy barcode matching
-      m[p.sku.toLowerCase().replace(/[-\s]/g, "")] = p.id;
-    });
-    return m;
-  }, [data.products]);
+  // Scannable code (SKU or UPC barcode) -> productId lookup
+  const skuMap = useMemo(() => buildScanIndex(data.products), [data.products]);
 
   // Line-by-line receiving state: { receivedQty, reason }
   const [lines, setLines] = useState(() =>
@@ -77,6 +70,11 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
   const [scanError, setScanError] = useState(null);
   const scannerRef = useRef(null);
   const scannerDivId = "receiving-scanner";
+  // The scan callback is registered once at scanner start; route it through a
+  // ref so it always sees the latest handler, and debounce repeat reads (the
+  // camera decodes the same barcode ~10x/second while it stays in frame).
+  const scanHandlerRef = useRef(null);
+  const lastReadRef = useRef({ code: null, ts: 0 });
 
   // Cleanup scanner on unmount
   useEffect(() => {
@@ -90,21 +88,24 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
 
   // --- Scanner controls --------------------------------------------------------
   const startScanner = useCallback(async () => {
+    if (scannerRef.current) return; // already running
     setScanError(null);
     setScanning(true);
-
-    // Wait for DOM element to render
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForElement(scannerDivId);
 
     const scanner = new Html5Qrcode(scannerDivId);
     scannerRef.current = scanner;
 
     try {
       await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 280, height: 100 }, aspectRatio: 2.0 },
+        CAMERA_CONSTRAINTS,
+        SCANNER_CONFIG,
         (decodedText) => {
-          handleBarcodeScan(decodedText);
+          const now = Date.now();
+          const last = lastReadRef.current;
+          if (decodedText === last.code && now - last.ts < 1500) return;
+          lastReadRef.current = { code: decodedText, ts: now };
+          if (scanHandlerRef.current) scanHandlerRef.current(decodedText);
         },
         () => {}, // ignore errors during scanning
       );
@@ -133,8 +134,7 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
   // --- Barcode handler ---------------------------------------------------------
   const handleBarcodeScan = useCallback(
     (code) => {
-      const normalized = code.toLowerCase().replace(/[-\s]/g, "");
-      const productId = skuMap[code.toLowerCase()] || skuMap[normalized];
+      const productId = matchScan(skuMap, code);
 
       if (!productId) {
         setLastScan({ code, matched: false });
@@ -157,6 +157,11 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
     },
     [lines, skuMap, prodMap],
   );
+
+  // Keep the scanner callback pointed at the latest handler.
+  useEffect(() => {
+    scanHandlerRef.current = handleBarcodeScan;
+  }, [handleBarcodeScan]);
 
   // --- Line helpers ------------------------------------------------------------
   const setLineField = (idx, field, value) =>
