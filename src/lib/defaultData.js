@@ -93,6 +93,12 @@ export function makeDemoData() {
     { id: "p-jh18blck", sku: "JH-18-8-BLCK", name: "ACC Big Eye Jig Heads - 1/8oz Black (8pk)", category: "Jig Heads", costPrice: 2.80, sellPrice: 5.99, onHand: 120, reorderPoint: 30, reorderQty: 120, supplier: "s2" },
     { id: "p-jh18blue", sku: "JH-18-8-BLUE", name: "ACC Big Eye Jig Heads - 1/8oz Blue (8pk)", category: "Jig Heads", costPrice: 2.80, sellPrice: 5.99, onHand: 120, reorderPoint: 30, reorderQty: 120, supplier: "s2" },
     { id: "p-jh18chrt", sku: "JH-18-8-CHRT", name: "ACC Big Eye Jig Heads - 1/8oz Chartreuse (8pk)", category: "Jig Heads", costPrice: 2.80, sellPrice: 5.99, onHand: 120, reorderPoint: 30, reorderQty: 120, supplier: "s2" },
+    // -- 2026 jig head colors (from the 2026 order writer catalog)
+    { id: "p-jh132whte", sku: "JH-132-8-WHTE", name: "ACC Big Eye Jig Heads - 1/32oz White (8pk)", category: "Jig Heads", costPrice: 2.80, sellPrice: 5.99, onHand: 120, reorderPoint: 30, reorderQty: 120, supplier: "s2" },
+    { id: "p-jh124blue", sku: "JH-124-8-BLUE", name: "ACC Big Eye Jig Heads - 1/24oz Blue (8pk)", category: "Jig Heads", costPrice: 2.80, sellPrice: 5.99, onHand: 120, reorderPoint: 30, reorderQty: 120, supplier: "s2" },
+    { id: "p-jh116orag", sku: "JH-116-8-ORAG", name: "ACC Big Eye Jig Heads - 1/16oz Orange (8pk)", category: "Jig Heads", costPrice: 2.80, sellPrice: 5.99, onHand: 120, reorderPoint: 30, reorderQty: 120, supplier: "s2" },
+    { id: "p-jh116whte", sku: "JH-116-8-WHTE", name: "ACC Big Eye Jig Heads - 1/16oz White (8pk)", category: "Jig Heads", costPrice: 2.80, sellPrice: 5.99, onHand: 120, reorderPoint: 30, reorderQty: 120, supplier: "s2" },
+    { id: "p-jh18slvr", sku: "JH-18-8-SLVR", name: "ACC Big Eye Jig Heads - 1/8oz Silver (8pk)", category: "Jig Heads", costPrice: 2.80, sellPrice: 5.99, onHand: 120, reorderPoint: 30, reorderQty: 120, supplier: "s2" },
   ],
   suppliers: [
     { id: "s1", name: "Far East Rods Co.", contact: "David Lin", email: "david@ferods.com", phone: "555-8801", leadDays: 45 },
