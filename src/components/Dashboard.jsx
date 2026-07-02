@@ -22,14 +22,15 @@ export default function Dashboard({ data }) {
   const totalAvail = computedProds.reduce((s, p) => s + p.available * p.costPrice, 0);
   const totalBO = computedProds.reduce((s, p) => s + p.backordered, 0);
 
-  // Fill rate & revenue lost -- across all active (locking) orders
+  // Fill rate & revenue lost -- active (locking) orders plus shipped history,
+  // so fill-and-kill shortfalls stay visible after shipment.
   const fillStats = useMemo(() => {
     let totalOrdered = 0;
     let totalFilled = 0;
     let revenueLost = 0;
     const prodMap = Object.fromEntries(data.products.map((p) => [p.id, p]));
     salesOrders.forEach((o) => {
-      if (!LOCKING.has(o.fulfillmentStage)) return;
+      if (!LOCKING.has(o.fulfillmentStage) && o.fulfillmentStage !== "shipped") return;
       o.lines.forEach((l) => {
         totalOrdered += l.qty;
         totalFilled += l.qtyFilled != null ? l.qtyFilled : l.qty;

@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING } from "../lib/constants";
-import { computeInventory, advanceStage } from "../lib/inventory";
+import { computeInventory, advanceStage, resolveBackorders } from "../lib/inventory";
+import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
 import { isQboConnected, fetchInvoices } from "../lib/qbo";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
@@ -9,6 +10,7 @@ import DealerPOImport from "./DealerPOImport";
 // --- OrderDrawer (detail panel) ------------------------------------------------
 function OrderDrawer({ order, data, setData, onClose, onEdit }) {
   const [shipModal, setShipModal] = useState(false);
+  const [boPolicy, setBoPolicy] = useState("kill"); // what to do with backorders at ship time
   const [shipForm, setShipForm] = useState({
     carrier: "",
     trackingNum: "",
@@ -62,6 +64,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
         trackingNum: (order.shipment && order.shipment.trackingNum) || "",
         shipDate: todayIso(),
       });
+      setBoPolicy("kill");
       setShipModal(true);
     } else {
       doAdvance();
@@ -69,7 +72,8 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
   };
 
   const confirmShip = () => {
-    doAdvance(shipForm);
+    // Resolve any outstanding backorders (fill & kill or split) before shipping
+    setData((d) => advanceStage(resolveBackorders(d, order.id, boPolicy), order.id, "shipped", shipForm));
     setShipModal(false);
   };
 
@@ -563,6 +567,9 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
             Marking <strong>Shipped</strong> will permanently deduct{" "}
             <strong>{fmtNum(totalUnits)}</strong> units from on-hand inventory.
           </div>
+          {totalBO > 0 && (
+            <BackorderPolicyPicker count={totalBO} value={boPolicy} onChange={setBoPolicy} />
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
             <Field label="Carrier">
               <input
@@ -984,6 +991,7 @@ export default function SalesOrders({ data, setData }) {
             0,
           );
           const hasBO = boUnits > 0;
+          const killedUnits = o.lines.reduce((s, l) => s + (l.qtyKilled || 0), 0);
           return (
             <TR
               key={o.id}
@@ -1060,6 +1068,9 @@ export default function SalesOrders({ data, setData }) {
                     <Badge status={o.type} label={o.type} />
                   )}
                   {hasBO && <Badge status="backordered" label="BO" />}
+                  {o.backorderOf && (
+                    <Badge status="backordered" label={`BO of ${o.backorderOf}`} />
+                  )}
                 </div>
               </TD>
               <TD>
@@ -1068,6 +1079,11 @@ export default function SalesOrders({ data, setData }) {
                 {hasBO && (
                   <span style={{ color: "#F97316", fontWeight: 600 }}>
                     {" "}({fmtNum(boUnits)} BO)
+                  </span>
+                )}
+                {killedUnits > 0 && (
+                  <span style={{ color: "#94A3B8", fontWeight: 600 }}>
+                    {" "}({fmtNum(killedUnits)} killed)
                   </span>
                 )}
               </TD>
