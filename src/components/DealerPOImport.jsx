@@ -321,8 +321,11 @@ export default function DealerPOImport({ data, setData, onClose }) {
   };
 
   // --- Line pricing: show orders get 10% off NEW products, 5% off the rest ----
+  // Base price is what we charge the dealer/distributor: the order writer's
+  // cost column (or the file's price column for generic CSVs). MSRP is only a
+  // fallback when no wholesale price is present.
   const linePrice = (l) => {
-    const base = l.sellPrice || l.cost || 0;
+    const base = l.cost || l.sellPrice || 0;
     if (!showOrder) return base;
     const isNew = String(l.status || "").trim().toUpperCase() === "NEW";
     return Math.round(base * (isNew ? 0.9 : 0.95) * 100) / 100;
