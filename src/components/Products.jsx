@@ -455,6 +455,7 @@ const blankProduct = () => ({
   name: "",
   category: "",
   costPrice: 0,
+  landedCost: 0,
   sellPrice: 0,
   onHand: 0,
   reorderPoint: 0,
@@ -513,6 +514,7 @@ export default function Products({ data, setData }) {
       name: p.name,
       category: p.category || "",
       costPrice: p.costPrice || 0,
+      landedCost: p.landedCost || 0,
       sellPrice: p.sellPrice || 0,
       onHand: p.onHand || 0,
       reorderPoint: p.reorderPoint || 0,
@@ -767,7 +769,7 @@ export default function Products({ data, setData }) {
 
       {/* Product Table */}
       <Table
-        headers={["SKU", "UPC", "Product", "Category", "Cost", "Sell", "On Hand", "Locked", "Available", "Status", "Actions"]}
+        headers={["SKU", "UPC", "Product", "Category", "Cost", "Landed", "Sell", "On Hand", "Locked", "Available", "Status", "Actions"]}
         empty={filtered.length === 0 ? "No products found." : null}
       >
         {filtered.map((p, i) => {
@@ -804,6 +806,9 @@ export default function Products({ data, setData }) {
               </TD>
               <TD>{p.category || "--"}</TD>
               <TD mono>{fmt(p.costPrice)}</TD>
+              <TD mono accent={p.landedCost ? "#7C3AED" : undefined}>
+                {p.landedCost ? fmt(p.landedCost) : "--"}
+              </TD>
               <TD mono>{fmt(p.sellPrice)}</TD>
               <TD mono>{fmtNum(p.onHand)}</TD>
               <TD mono accent={p.locked > 0 ? "#EAB308" : undefined}>
@@ -941,6 +946,16 @@ export default function Products({ data, setData }) {
                 min="0"
                 value={form.costPrice}
                 onChange={(e) => setForm((f) => ({ ...f, costPrice: +e.target.value || 0 }))}
+              />
+            </Field>
+            <Field label="Landed Cost (auto-set at receiving)">
+              <input
+                style={IS}
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.landedCost}
+                onChange={(e) => setForm((f) => ({ ...f, landedCost: +e.target.value || 0 }))}
               />
             </Field>
             <Field label="Sell Price">
