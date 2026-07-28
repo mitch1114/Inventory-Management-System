@@ -895,6 +895,64 @@ export default function SalesOrders({ data, setData }) {
     setForm((f) => ({ ...f, lines: f.lines.filter((_, i) => i !== idx) }));
 
   // --- CSV export all orders -----------------------------------------------------
+  // Export the filtered orders as a QuickBooks Online invoice-import CSV:
+  // one row per line item, rows grouped into invoices by InvoiceNo, using the
+  // column names QBO's import mapper recognizes. Dates are M/D/YYYY; DueDate
+  // defaults to invoice date + 30 days (Net 30).
+  const exportQboCSV = () => {
+    const mdY = (iso) => {
+      if (!iso) return "";
+      const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+      return `${m}/${d}/${y}`;
+    };
+    const plusDays = (iso, days) => {
+      const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+      const dt = new Date(y, m - 1, d + days);
+      return `${dt.getMonth() + 1}/${dt.getDate()}/${dt.getFullYear()}`;
+    };
+    const esc = (v) => {
+      const s = String(v == null ? "" : v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = [
+      "InvoiceNo",
+      "Customer",
+      "InvoiceDate",
+      "DueDate",
+      "Terms",
+      "Item(Product/Service)",
+      "ItemDescription",
+      "ItemQuantity",
+      "ItemRate",
+      "ItemAmount",
+    ];
+    const rows = [];
+    filtered.forEach((o) => {
+      if (o.fulfillmentStage === "cancelled") return;
+      const invDate = (o.shipment && o.shipment.shipDate) || o.date;
+      o.lines.forEach((l) => {
+        const qty = l.qtyFilled != null ? l.qtyFilled : l.qty;
+        if (qty <= 0) return;
+        const prod = prodMap[l.productId];
+        rows.push([
+          o.orderNum,
+          o.customer,
+          mdY(invDate),
+          plusDays(invDate, 30),
+          "Net 30",
+          prod ? prod.sku : "",
+          prod ? prod.name : "",
+          qty,
+          (l.price || 0).toFixed(2),
+          (qty * (l.price || 0)).toFixed(2),
+        ]);
+      });
+    });
+    if (rows.length === 0) return;
+    const csv = [header.join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n");
+    dlCSV(csv, "qbo-invoice-import.csv");
+  };
+
   const exportAllCSV = () => {
     const rows = filtered.map((o) => {
       const units = o.lines.reduce(
@@ -965,6 +1023,9 @@ export default function SalesOrders({ data, setData }) {
           />
           <button style={{ ...BS, fontSize: 12 }} onClick={exportAllCSV}>
             Export CSV
+          </button>
+          <button style={{ ...BS, fontSize: 12 }} onClick={exportQboCSV}>
+            Export for QBO
           </button>
           <button style={BAq} onClick={() => setShowImport(true)}>
             Import New Dealer / Distributor PO

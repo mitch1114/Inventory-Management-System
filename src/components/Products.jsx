@@ -479,6 +479,22 @@ export default function Products({ data, setData }) {
     [data.products, data.salesOrders],
   );
 
+  // productId -> earliest expected arrival date from open supplier POs
+  const onOrderDates = useMemo(() => {
+    const m = {};
+    (data.purchaseOrders || []).forEach((po) => {
+      if (po.status !== "ordered" && po.status !== "partial") return;
+      (po.lines || []).forEach((l) => {
+        if (!l.productId) return;
+        const remaining = l.qty - (l.qtyReceived || 0);
+        if (remaining <= 0) return;
+        const d = po.expectedDate || "";
+        if (!m[l.productId] || (d && d < m[l.productId])) m[l.productId] = d || m[l.productId] || "";
+      });
+    });
+    return m;
+  }, [data.purchaseOrders]);
+
   // Category list
   const categories = useMemo(
     () => [...new Set(data.products.map((p) => p.category).filter(Boolean))].sort(),
@@ -773,15 +789,22 @@ export default function Products({ data, setData }) {
         empty={filtered.length === 0 ? "No products found." : null}
       >
         {filtered.map((p, i) => {
+          // Out-of-stock items with an open supplier PO show as On Order with
+          // the (earliest) expected arrival date instead of a dead end.
+          const incomingDate = onOrderDates[p.id];
           const status =
             p.available === 0
-              ? "cancelled"
+              ? incomingDate
+                ? "booked"
+                : "cancelled"
               : p.available <= p.reorderPoint
                 ? "partial"
                 : "confirmed";
           const statusLabel =
             p.available === 0
-              ? "Out of Stock"
+              ? incomingDate
+                ? `On Order · arrives ${fmtDate(incomingDate)}`
+                : "Out of Stock"
               : p.available <= p.reorderPoint
                 ? "Low Stock"
                 : "In Stock";
