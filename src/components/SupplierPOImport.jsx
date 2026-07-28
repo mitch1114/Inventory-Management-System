@@ -317,6 +317,7 @@ export default function SupplierPOImport({ data, setData, onClose }) {
   const [lines, setLines] = useState([]);
   const [error, setError] = useState("");
   const [importMode, setImportMode] = useState(""); // "csv" | "supplier"
+  const [parsing, setParsing] = useState(false); // true while AI reads a PDF
   const fileRef = useRef();
 
   // --- Product lookup by SKU ---
@@ -445,8 +446,83 @@ export default function SupplierPOImport({ data, setData, onClose }) {
         }
       };
       reader.readAsArrayBuffer(file);
+    } else if (ext === "pdf") {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        setParsing(true);
+        try {
+          // e.target.result is a data: URL -- strip the prefix to get raw base64
+          const pdfBase64 = String(e.target.result).replace(/^data:.*?;base64,/, "");
+
+          const resp = await fetch("/api/parse-po", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pdfBase64, filename: file.name }),
+          });
+          const result = await resp.json();
+
+          if (!result.success || !result.parsed || !Array.isArray(result.parsed.lines)) {
+            setError(
+              result.reason === "not-configured"
+                ? "AI parsing not configured. Couldn't read this PDF automatically. Export it as CSV/XLSX or enter the PO manually."
+                : "Couldn't read this PDF automatically. Export it as CSV/XLSX or enter the PO manually.",
+            );
+            return;
+          }
+
+          const parsed = result.parsed;
+          const products = parsed.lines
+            .map((l) => {
+              const sku = String(l.sku || "").trim();
+              const desc = String(l.description || "").trim();
+              const qty = parseInt(String(l.qty ?? "0").replace(/[^0-9.-]/g, "")) || 0;
+              const cost = parseFloat(String(l.unitCost ?? "0").replace(/[^0-9.-]/g, "")) || 0;
+              return { sku, desc: desc || sku, qty, cost, ext: qty * cost };
+            })
+            .filter((p) => p.sku && p.qty > 0);
+
+          if (products.length === 0) {
+            setError("Couldn't read this PDF automatically. Export it as CSV/XLSX or enter the PO manually.");
+            return;
+          }
+
+          const meta = {
+            supplierHint: String(parsed.supplier || "").trim(),
+            poRef: String(parsed.poRef || "").trim(),
+            date: String(parsed.date || "").trim(),
+            products,
+          };
+          setParsedMeta(meta);
+          const sid = matchSupplier(meta.supplierHint);
+          if (sid) setSupplierId(sid);
+          setPoInfo((p) => ({
+            ...p,
+            poRef: meta.poRef || "",
+            date: meta.date || todayIso(),
+          }));
+
+          // Pre-match products (same as the supplier-specific XLSX parsers)
+          const matched = meta.products.map((prod) => {
+            const found = findProduct(prod.sku);
+            return {
+              ...prod,
+              productId: found ? found.id : "",
+              productName: found ? found.name : "",
+              matched: !!found,
+            };
+          });
+          setLines(matched);
+          setImportMode("supplier");
+          setStep("review");
+        } catch (err) {
+          setError("Couldn't read this PDF automatically. Export it as CSV/XLSX or enter the PO manually.");
+        } finally {
+          setParsing(false);
+        }
+      };
+      reader.readAsDataURL(file);
     } else {
-      setError("Unsupported file type. Please upload a .csv or .xlsx file.");
+      setError("Unsupported file type. Please upload a .csv, .xlsx, or .pdf file.");
     }
   };
 
@@ -597,14 +673,15 @@ export default function SupplierPOImport({ data, setData, onClose }) {
               borderRadius: 12,
               padding: "48px 24px",
               textAlign: "center",
-              cursor: "pointer",
+              cursor: parsing ? "wait" : "pointer",
               background: "#F8FAFC",
+              opacity: parsing ? 0.7 : 1,
               transition: "border-color 0.15s",
             }}
-            onClick={() => fileRef.current && fileRef.current.click()}
+            onClick={() => !parsing && fileRef.current && fileRef.current.click()}
             onDragOver={(e) => {
               e.preventDefault();
-              e.currentTarget.style.borderColor = "#6D28D9";
+              if (!parsing) e.currentTarget.style.borderColor = "#6D28D9";
             }}
             onDragLeave={(e) => {
               e.currentTarget.style.borderColor = "#CBD5E1";
@@ -612,25 +689,42 @@ export default function SupplierPOImport({ data, setData, onClose }) {
             onDrop={(e) => {
               e.preventDefault();
               e.currentTarget.style.borderColor = "#CBD5E1";
+              if (parsing) return;
               const f = e.dataTransfer.files[0];
               if (f) handleFile(f);
             }}
           >
-            <div style={{ fontSize: 36, marginBottom: 8 }}>&#128194;</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>
-              Drop a supplier PO file here or click to browse
-            </div>
-            <div style={{ fontSize: 12, color: "#64748B" }}>
-              Supports: Pokee, Fishing Capital, Tech Angler proforma invoices (.xlsx), or generic CSV
-            </div>
+            {parsing ? (
+              <>
+                <div style={{ fontSize: 36, marginBottom: 8 }}>&#129302;</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>
+                  Reading PDF with AI &mdash; usually 10-20 seconds...
+                </div>
+                <div style={{ fontSize: 12, color: "#64748B" }}>
+                  Extracting supplier, PO number, and line items from the document.
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 36, marginBottom: 8 }}>&#128194;</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>
+                  Drop a supplier PO file here or click to browse
+                </div>
+                <div style={{ fontSize: 12, color: "#64748B" }}>
+                  Supports: Pokee, Fishing Capital, Tech Angler proforma invoices (.xlsx), any supplier PDF, or generic CSV
+                </div>
+              </>
+            )}
             <input
               ref={fileRef}
               type="file"
-              accept=".csv,.xlsx,.xls"
+              accept=".csv,.xlsx,.xls,.pdf"
               style={{ display: "none" }}
+              disabled={parsing}
               onChange={(e) => {
                 const f = e.target.files[0];
                 if (f) handleFile(f);
+                e.target.value = "";
               }}
             />
           </div>
@@ -656,6 +750,9 @@ export default function SupplierPOImport({ data, setData, onClose }) {
               </li>
               <li>
                 <strong>Tech Angler</strong> -- Purchase order with Commodity/Specification, SIZE, Quantity columns.
+              </li>
+              <li>
+                <strong>PDF</strong> -- any supplier proforma/PO, extracted automatically with AI.
               </li>
               <li>
                 <strong>CSV / Generic Excel</strong> -- Map columns for SKU and Quantity manually.
