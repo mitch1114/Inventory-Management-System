@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
+import { buildScanIndex, matchScan, SCANNER_CONFIG, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { uid, fmtNum, nowIso, toCSV, dlCSV } from "../lib/utils";
 import { Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BG, BAq } from "./ui";
 import HelpPanel from "./HelpPanel";
@@ -121,18 +122,7 @@ export default function CycleCount({ data, setData }) {
     () => Object.fromEntries(data.products.map((p) => [p.id, p])),
     [data.products],
   );
-  const skuMap = useMemo(() => {
-    const m = {};
-    data.products.forEach((p) => {
-      m[p.sku.toLowerCase()] = p.id;
-      m[p.sku.toLowerCase().replace(/[-\s]/g, "")] = p.id;
-      if (p.upc) {
-        m[p.upc.toLowerCase()] = p.id;
-        m[p.upc.toLowerCase().replace(/[-\s]/g, "")] = p.id;
-      }
-    });
-    return m;
-  }, [data.products]);
+  const skuMap = useMemo(() => buildScanIndex(data.products), [data.products]);
 
   const categories = useMemo(() => {
     const s = new Set(data.products.map((p) => p.category).filter(Boolean));
@@ -184,17 +174,18 @@ export default function CycleCount({ data, setData }) {
 
   // --- Scanner controls --------------------------------------------------------
   const startScanner = useCallback(async () => {
+    if (scannerRef.current) return; // already running
     setScanError(null);
     setScanning(true);
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForElement(scannerDivId);
 
     const scanner = new Html5Qrcode(scannerDivId);
     scannerRef.current = scanner;
 
     try {
       await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 280, height: 100 }, aspectRatio: 2.0 },
+        CAMERA_CONSTRAINTS,
+        SCANNER_CONFIG,
         (decodedText) => {
           const now = Date.now();
           const last = lastReadRef.current;
@@ -225,8 +216,7 @@ export default function CycleCount({ data, setData }) {
   // --- Barcode handler ---------------------------------------------------------
   const handleBarcodeScan = useCallback(
     (code) => {
-      const normalized = code.toLowerCase().replace(/[-\s]/g, "");
-      const productId = skuMap[code.toLowerCase()] || skuMap[normalized];
+      const productId = matchScan(skuMap, code);
 
       if (!productId) {
         scanFeedback(false);

@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { autoAllocate } from "../lib/inventory";
 import { uid, fmt, fmtNum, nowIso } from "../lib/utils";
+import { buildScanIndex, matchScan, SCANNER_CONFIG, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
+import { LANDED_COST_TYPES, allocateLandedCosts, blendLandedCost } from "../lib/landedCost";
 import { Modal, Field, Badge, IS, SS, BP, BS, BD, BG } from "./ui";
 
 // --- Reason codes for variances ------------------------------------------------
@@ -46,16 +48,8 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
     [data.suppliers],
   );
 
-  // Build SKU -> productId lookup for barcode scanning
-  const skuMap = useMemo(() => {
-    const m = {};
-    data.products.forEach((p) => {
-      m[p.sku.toLowerCase()] = p.id;
-      // Also index without dashes/spaces for fuzzy barcode matching
-      m[p.sku.toLowerCase().replace(/[-\s]/g, "")] = p.id;
-    });
-    return m;
-  }, [data.products]);
+  // Scannable code (SKU or UPC barcode) -> productId lookup
+  const skuMap = useMemo(() => buildScanIndex(data.products), [data.products]);
 
   // Line-by-line receiving state: { receivedQty, reason }
   const [lines, setLines] = useState(() =>
@@ -77,6 +71,11 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
   const [scanError, setScanError] = useState(null);
   const scannerRef = useRef(null);
   const scannerDivId = "receiving-scanner";
+  // The scan callback is registered once at scanner start; route it through a
+  // ref so it always sees the latest handler, and debounce repeat reads (the
+  // camera decodes the same barcode ~10x/second while it stays in frame).
+  const scanHandlerRef = useRef(null);
+  const lastReadRef = useRef({ code: null, ts: 0 });
 
   // Cleanup scanner on unmount
   useEffect(() => {
@@ -90,21 +89,24 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
 
   // --- Scanner controls --------------------------------------------------------
   const startScanner = useCallback(async () => {
+    if (scannerRef.current) return; // already running
     setScanError(null);
     setScanning(true);
-
-    // Wait for DOM element to render
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForElement(scannerDivId);
 
     const scanner = new Html5Qrcode(scannerDivId);
     scannerRef.current = scanner;
 
     try {
       await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 280, height: 100 }, aspectRatio: 2.0 },
+        CAMERA_CONSTRAINTS,
+        SCANNER_CONFIG,
         (decodedText) => {
-          handleBarcodeScan(decodedText);
+          const now = Date.now();
+          const last = lastReadRef.current;
+          if (decodedText === last.code && now - last.ts < 1500) return;
+          lastReadRef.current = { code: decodedText, ts: now };
+          if (scanHandlerRef.current) scanHandlerRef.current(decodedText);
         },
         () => {}, // ignore errors during scanning
       );
@@ -133,8 +135,7 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
   // --- Barcode handler ---------------------------------------------------------
   const handleBarcodeScan = useCallback(
     (code) => {
-      const normalized = code.toLowerCase().replace(/[-\s]/g, "");
-      const productId = skuMap[code.toLowerCase()] || skuMap[normalized];
+      const productId = matchScan(skuMap, code);
 
       if (!productId) {
         setLastScan({ code, matched: false });
@@ -158,6 +159,11 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
     [lines, skuMap, prodMap],
   );
 
+  // Keep the scanner callback pointed at the latest handler.
+  useEffect(() => {
+    scanHandlerRef.current = handleBarcodeScan;
+  }, [handleBarcodeScan]);
+
   // --- Line helpers ------------------------------------------------------------
   const setLineField = (idx, field, value) =>
     setLines((prev) =>
@@ -171,6 +177,24 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
     setLines((prev) =>
       prev.map((l) => ({ ...l, receivedQty: l.expectedQty, reason: "" })),
     );
+
+  // --- Landed costs (freight, duty, fees for this receipt) ----------------------
+  const [landedCosts, setLandedCosts] = useState([]);
+  const landedAlloc = useMemo(
+    () =>
+      allocateLandedCosts(
+        lines
+          .filter((l) => l.receivedQty > 0)
+          .map((l) => ({
+            productId: l.productId,
+            qty: l.receivedQty,
+            unitCost: l.cost || prodMap[l.productId]?.costPrice || 0,
+          })),
+        landedCosts,
+      ),
+    [lines, landedCosts, prodMap],
+  );
+  const applyLanded = landedAlloc.totalExtra > 0;
 
   // --- Summary stats -----------------------------------------------------------
   const totalExpected = lines.reduce((s, l) => s + l.expectedQty, 0);
@@ -188,12 +212,23 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
       .filter((l) => l.receivedQty > 0)
       .map((l) => ({ productId: l.productId, qty: l.receivedQty }));
 
-    // Add received quantities to on-hand
+    // Add received quantities to on-hand; blend landed cost when extra costs
+    // (freight/duty/fees) were entered for this receipt.
     const updatedProducts = data.products.map((p) => {
       const incoming = receivedLines
         .filter((rl) => rl.productId === p.id)
         .reduce((s, rl) => s + rl.qty, 0);
-      return incoming > 0 ? { ...p, onHand: p.onHand + incoming } : p;
+      if (incoming <= 0) return p;
+      const updated = { ...p, onHand: p.onHand + incoming };
+      if (applyLanded && landedAlloc.landedUnitCost[p.id] != null) {
+        updated.landedCost = blendLandedCost(
+          p.onHand,
+          p.landedCost || 0,
+          incoming,
+          landedAlloc.landedUnitCost[p.id],
+        );
+      }
+      return updated;
     });
 
     // Determine PO status: fully received or partial
@@ -216,9 +251,19 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
         lines: p.lines.map((pl) => {
           const match = lines.find((l) => l.productId === pl.productId);
           if (!match) return pl;
-          return { ...pl, qtyReceived: match.receivedQty };
+          const updated = { ...pl, qtyReceived: match.receivedQty };
+          if (applyLanded && landedAlloc.landedUnitCost[pl.productId] != null) {
+            updated.landedUnitCost = landedAlloc.landedUnitCost[pl.productId];
+          }
+          return updated;
         }),
         receivedDate: newStatus !== "ordered" ? nowIso().slice(0, 10) : undefined,
+        ...(applyLanded
+          ? {
+              landedCosts: landedCosts.filter((c) => (parseFloat(c.amount) || 0) > 0),
+              landedTotal: landedAlloc.totalExtra,
+            }
+          : {}),
       };
     });
 
@@ -236,6 +281,21 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
       entity: po.orderNum,
       description: `Received ${po.orderNum} -- ${fmtNum(totalReceived)}/${fmtNum(totalExpected)} units from ${suppMap[po.supplierId]?.name || "Unknown"}${varianceNote}`,
     });
+
+    // Landed cost log
+    if (applyLanded) {
+      const parts = landedCosts
+        .filter((c) => (parseFloat(c.amount) || 0) > 0)
+        .map((c) => `${(LANDED_COST_TYPES.find((t) => t.value === c.type) || {}).label || c.type} ${fmt(parseFloat(c.amount) || 0)}`)
+        .join(", ");
+      logEntries.push({
+        id: uid(),
+        ts: nowIso(),
+        type: "landed-cost",
+        entity: po.orderNum,
+        description: `Landed costs ${fmt(landedAlloc.totalExtra)} (${parts}) allocated across ${fmtNum(totalReceived)} received units on ${po.orderNum} -- product landed costs updated`,
+      });
+    }
 
     // Log individual variances
     for (const line of linesWithVariance) {
@@ -586,6 +646,105 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* Landed costs: freight, duty, fees for this receipt */}
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 10,
+          padding: "12px 16px",
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: landedCosts.length ? 10 : 0 }}>
+          <div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>Landed Costs</span>
+            <span style={{ fontSize: 11, color: "#94A3B8", marginLeft: 8 }}>
+              Freight, duties/tariffs & fees for this shipment -- allocated across received units
+            </span>
+          </div>
+          <button
+            style={{ ...BS, fontSize: 11, marginLeft: "auto" }}
+            onClick={() =>
+              setLandedCosts((prev) => [...prev, { id: uid(), type: "freight", amount: "", basis: "value" }])
+            }
+          >
+            + Add Cost
+          </button>
+        </div>
+        {landedCosts.map((c) => (
+          <div key={c.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+            <select
+              style={{ ...SS, width: 180 }}
+              value={c.type}
+              onChange={(e) =>
+                setLandedCosts((prev) => prev.map((x) => (x.id === c.id ? { ...x, type: e.target.value } : x)))
+              }
+            >
+              {LANDED_COST_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+            <input
+              style={{ ...IS, width: 130 }}
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="$ amount"
+              value={c.amount}
+              onChange={(e) =>
+                setLandedCosts((prev) => prev.map((x) => (x.id === c.id ? { ...x, amount: e.target.value } : x)))
+              }
+            />
+            <select
+              style={{ ...SS, width: 150 }}
+              value={c.basis}
+              onChange={(e) =>
+                setLandedCosts((prev) => prev.map((x) => (x.id === c.id ? { ...x, basis: e.target.value } : x)))
+              }
+            >
+              <option value="value">Split by value</option>
+              <option value="units">Split by units</option>
+            </select>
+            <button
+              style={{ ...BS, fontSize: 12, padding: "4px 10px" }}
+              onClick={() => setLandedCosts((prev) => prev.filter((x) => x.id !== c.id))}
+            >
+              &times;
+            </button>
+          </div>
+        ))}
+        {applyLanded && totalReceived > 0 && (
+          <div
+            style={{
+              background: "#F5F3FF",
+              border: "1px solid #DDD6FE",
+              borderRadius: 8,
+              padding: "8px 12px",
+              marginTop: 8,
+              fontSize: 12,
+              color: "#5B21B6",
+            }}
+          >
+            <strong>{fmt(landedAlloc.totalExtra)}</strong> will be allocated across{" "}
+            {fmtNum(totalReceived)} received units. Landed unit costs on confirm:{" "}
+            {lines
+              .filter((l) => l.receivedQty > 0)
+              .map((l) => {
+                const prod = prodMap[l.productId];
+                const landed = landedAlloc.landedUnitCost[l.productId];
+                return `${prod?.sku || "?"} ${fmt(l.cost || prod?.costPrice || 0)} -> ${fmt(landed || 0)}`;
+              })
+              .join(" · ")}
+          </div>
+        )}
+        {applyLanded && totalReceived === 0 && (
+          <div style={{ fontSize: 12, color: "#D97706", marginTop: 6 }}>
+            Enter received quantities above to see the landed cost allocation.
+          </div>
+        )}
       </div>
 
       {/* Summary Bar */}

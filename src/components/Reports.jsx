@@ -36,7 +36,7 @@ const CC = ({ title, children }) => (
   </div>
 );
 
-const MetricCard = ({ value, label, accent }) => (
+const MetricCard = ({ value, label, sub, accent }) => (
   <div
     style={{
       background: "#FFFFFF",
@@ -59,6 +59,7 @@ const MetricCard = ({ value, label, accent }) => (
     >
       {label}
     </div>
+    {sub && <div style={{ fontSize: 9, color: "#94A3B8", marginTop: 2 }}>{sub}</div>}
   </div>
 );
 
@@ -151,7 +152,9 @@ export default function Reports({ data }) {
           s +
           o.lines.reduce((ls, l) => {
             const p = products.find((p) => p.id === l.productId);
-            return ls + filledQty(l) * ((p && p.costPrice) || 0);
+            // Landed cost (freight/duty/fees included) when a receipt has set
+            // it; supplier cost otherwise.
+            return ls + filledQty(l) * ((p && (p.landedCost || p.costPrice)) || 0);
           }, 0),
         0,
       ),
@@ -300,7 +303,7 @@ export default function Reports({ data }) {
       >
         <MetricCard value={fmt(allRevenue)} label="All Revenue (Top Line)" accent="#7C3AED" />
         <MetricCard value={fmt(revenue)} label="Revenue (Shipped)" accent="#10B981" />
-        <MetricCard value={fmt(cogs)} label="COGS" accent="#EF4444" />
+        <MetricCard value={fmt(cogs)} label="COGS" sub="landed cost basis" accent="#EF4444" />
         <MetricCard value={fmt(revenue - cogs)} label="Gross Profit" accent="#7C3AED" />
         <MetricCard
           value={revenue > 0 ? ((1 - cogs / revenue) * 100).toFixed(1) + "%" : "--"}
