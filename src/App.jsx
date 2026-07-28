@@ -29,7 +29,10 @@ const TABS = [
   { key: "customers", label: "Customers", icon: "\u2B50" },
   { key: "reports", label: "Reports", icon: "\u2261" },
   { key: "planning", label: "Demand Planning", icon: "\u25C8" },
-  { key: "cyclecount", label: "Cycle Count", icon: "\u2714" },
+  // Cycle Count is hidden while the warehouse-mode/scanning project is on
+  // hold -- the feature is fully functional (manual entry works; camera
+  // scanning is unreliable on phones). Restore by uncommenting this line.
+  // { key: "cyclecount", label: "Cycle Count", icon: "\u2714" },
   { key: "audit", label: "Audit Log", icon: "\u270E" },
   { key: "settings", label: "Settings", icon: "\u2699" },
 ];
