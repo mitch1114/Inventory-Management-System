@@ -2,10 +2,10 @@
 // Vercel's Hobby plan caps deployments at 12 functions, so the individual
 // handlers live in /server/qbo and are dispatched here by the [action] path
 // segment. URLs are unchanged (e.g. /api/qbo/auth, /api/qbo/callback).
-import auth from "../../server/qbo/auth.js";
-import callback from "../../server/qbo/callback.js";
-import refresh from "../../server/qbo/refresh.js";
-import invoices from "../../server/qbo/invoices.js";
+import auth from "../server/qbo/auth.js";
+import callback from "../server/qbo/callback.js";
+import refresh from "../server/qbo/refresh.js";
+import invoices from "../server/qbo/invoices.js";
 
 const ROUTES = {
   auth,
