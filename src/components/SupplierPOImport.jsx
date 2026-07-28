@@ -633,6 +633,29 @@ export default function SupplierPOImport({ data, setData, onClose }) {
   };
 
   // --- Stats ---
+  // Manually map an unmatched supplier item code to one of our products (or
+  // clear a manual mapping by passing an empty productId).
+  const remapLine = (idx, productId) => {
+    setLines((prev) =>
+      prev.map((l, i) => {
+        if (i !== idx) return l;
+        if (!productId) return { ...l, productId: "", productName: "", matched: false, remapped: false };
+        const prod = data.products.find((p) => p.id === productId);
+        return {
+          ...l,
+          productId,
+          productName: prod ? prod.name : "",
+          matched: true,
+          remapped: true,
+        };
+      }),
+    );
+  };
+  const productOptions = useMemo(
+    () => [...data.products].sort((a, b) => a.sku.localeCompare(b.sku)),
+    [data.products],
+  );
+
   const matchedLines = lines.filter((l) => l.matched);
   const unmatchedLines = lines.filter((l) => !l.matched);
   const totalUnits = lines.reduce((s, l) => s + l.qty, 0);
@@ -1135,10 +1158,26 @@ export default function SupplierPOImport({ data, setData, onClose }) {
                         {fmt(l.qty * l.cost)}
                       </td>
                       <td style={{ padding: "7px 12px", textAlign: "center" }}>
-                        {l.matched ? (
+                        {l.matched && !l.remapped ? (
                           <Badge status="confirmed" label="OK" />
                         ) : (
-                          <Badge status="cancelled" label="No match" />
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "center" }}>
+                            {l.remapped && <Badge status="confirmed" label="Mapped" />}
+                            <select
+                              style={{ ...SS, maxWidth: 200, fontSize: 11 }}
+                              value={l.remapped ? l.productId : ""}
+                              onChange={(e) => remapLine(i, e.target.value)}
+                            >
+                              <option value="">
+                                {l.remapped ? "-- clear mapping --" : "-- map to product --"}
+                              </option>
+                              {productOptions.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.sku} — {p.name.slice(0, 40)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                         )}
                       </td>
                     </tr>
