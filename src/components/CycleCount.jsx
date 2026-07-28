@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
-import { buildScanIndex, matchScan, SCANNER_CONFIG, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
+import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { uid, fmtNum, nowIso, toCSV, dlCSV } from "../lib/utils";
 import { Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BG, BAq } from "./ui";
 import HelpPanel from "./HelpPanel";
@@ -179,7 +179,7 @@ export default function CycleCount({ data, setData }) {
     setScanning(true);
     await waitForElement(scannerDivId);
 
-    const scanner = new Html5Qrcode(scannerDivId);
+    const scanner = new Html5Qrcode(scannerDivId, DECODER_OPTIONS);
     scannerRef.current = scanner;
 
     try {

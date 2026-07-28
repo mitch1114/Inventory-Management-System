@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { autoAllocate } from "../lib/inventory";
 import { uid, fmt, fmtNum, nowIso } from "../lib/utils";
-import { buildScanIndex, matchScan, SCANNER_CONFIG, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
+import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { LANDED_COST_TYPES, allocateLandedCosts, blendLandedCost } from "../lib/landedCost";
 import { Modal, Field, Badge, IS, SS, BP, BS, BD, BG } from "./ui";
 
@@ -94,7 +94,7 @@ export default function ReceivingModal({ po, data, setData, onClose, onResult })
     setScanning(true);
     await waitForElement(scannerDivId);
 
-    const scanner = new Html5Qrcode(scannerDivId);
+    const scanner = new Html5Qrcode(scannerDivId, DECODER_OPTIONS);
     scannerRef.current = scanner;
 
     try {
