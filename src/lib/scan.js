@@ -12,16 +12,10 @@ import { Html5QrcodeSupportedFormats } from "html5-qrcode";
 
 export const CAMERA_CONSTRAINTS = { facingMode: "environment" };
 
-export const SCANNER_CONFIG = {
-  fps: 15,
-  // Size the scan box from the actual camera viewport -- fixed pixel boxes
-  // fail or crop badly on narrow portrait phone cameras.
-  qrbox: (viewfinderWidth, viewfinderHeight) => ({
-    width: Math.max(180, Math.min(Math.floor(viewfinderWidth * 0.9), 360)),
-    height: Math.max(100, Math.min(Math.floor(viewfinderHeight * 0.45), 180)),
-  }),
-  // Native BarcodeDetector (Android Chrome et al.) when available.
-  experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+// Constructor options for `new Html5Qrcode(elementId, DECODER_OPTIONS)`.
+// IMPORTANT: formatsToSupport and experimentalFeatures only take effect here,
+// in the constructor -- html5-qrcode ignores them in the start() config.
+export const DECODER_OPTIONS = {
   formatsToSupport: [
     Html5QrcodeSupportedFormats.UPC_A,
     Html5QrcodeSupportedFormats.UPC_E,
@@ -31,6 +25,27 @@ export const SCANNER_CONFIG = {
     Html5QrcodeSupportedFormats.CODE_39,
     Html5QrcodeSupportedFormats.QR_CODE,
   ],
+  // Native BarcodeDetector (Android Chrome et al.) -- much faster 1D decoding.
+  experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+  verbose: false,
+};
+
+// start() camera-scan config.
+export const SCANNER_CONFIG = {
+  fps: 15,
+  // Size the scan box from the actual camera viewport -- fixed pixel boxes
+  // fail or crop badly on narrow portrait phone cameras.
+  qrbox: (viewfinderWidth, viewfinderHeight) => ({
+    width: Math.max(180, Math.min(Math.floor(viewfinderWidth * 0.9), 360)),
+    height: Math.max(100, Math.min(Math.floor(viewfinderHeight * 0.45), 180)),
+  }),
+  // Request a high-resolution feed -- low-res defaults make 1D barcodes
+  // (thin lines) undecodable on many phones. "ideal" is a soft constraint.
+  videoConstraints: {
+    facingMode: "environment",
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+  },
 };
 
 // Numeric key for UPC/EAN matching: digits only, leading zeros stripped.

@@ -6,7 +6,7 @@ import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
-import { buildScanIndex, matchScan, SCANNER_CONFIG, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
+import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { sendShippedEmail } from "../lib/notify";
 import HelpPanel from "./HelpPanel";
 
@@ -94,7 +94,7 @@ export default function PipelineView({ data, setData }) {
     setPickScanning(true);
     await waitForElement(pickScannerDivId);
 
-    const scanner = new Html5Qrcode(pickScannerDivId);
+    const scanner = new Html5Qrcode(pickScannerDivId, DECODER_OPTIONS);
     pickScannerRef.current = scanner;
 
     try {
