@@ -4,6 +4,8 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
+    { "source": "/api/qbo/:action", "destination": "/api/qbo?action=:action" },
+    { "source": "/api/shipstation/:action", "destination": "/api/shipstation?action=:action" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

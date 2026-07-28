@@ -2,13 +2,13 @@
 // Vercel's Hobby plan caps deployments at 12 functions, so the individual
 // handlers live in /server/shipstation and are dispatched here by the
 // [action] path segment. URLs are unchanged (e.g. /api/shipstation/create-order).
-import createOrder from "../../server/shipstation/create-order.js";
-import inventoryLevels from "../../server/shipstation/inventory-levels.js";
-import inventoryPush from "../../server/shipstation/inventory-push.js";
-import inventoryWarehouses from "../../server/shipstation/inventory-warehouses.js";
-import syncShipments from "../../server/shipstation/sync-shipments.js";
-import testConnection from "../../server/shipstation/test-connection.js";
-import testConnectionV2 from "../../server/shipstation/test-connection-v2.js";
+import createOrder from "../server/shipstation/create-order.js";
+import inventoryLevels from "../server/shipstation/inventory-levels.js";
+import inventoryPush from "../server/shipstation/inventory-push.js";
+import inventoryWarehouses from "../server/shipstation/inventory-warehouses.js";
+import syncShipments from "../server/shipstation/sync-shipments.js";
+import testConnection from "../server/shipstation/test-connection.js";
+import testConnectionV2 from "../server/shipstation/test-connection-v2.js";
 
 const ROUTES = {
   "create-order": createOrder,
