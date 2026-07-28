@@ -57,6 +57,13 @@ async function loadFromSupabase() {
   return null;
 }
 
+// Optional listener so the UI can surface database save failures instead of
+// silently claiming "Synced" while changes live only in this browser.
+let saveResultHandler = null;
+export function onSaveResult(fn) {
+  saveResultHandler = fn;
+}
+
 async function saveToSupabase(d) {
   if (!isSupabaseConfigured()) return;
   try {
@@ -67,8 +74,10 @@ async function saveToSupabase(d) {
         { onConflict: "id" },
       );
     if (error) throw error;
+    if (saveResultHandler) saveResultHandler(true);
   } catch (e) {
     console.warn("Failed to save to Supabase:", e);
+    if (saveResultHandler) saveResultHandler(false, e);
   }
 }
 

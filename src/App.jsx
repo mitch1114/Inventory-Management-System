@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { LOCKING } from "./lib/constants";
 import { computeInventory } from "./lib/inventory";
-import { loadData, saveData, subscribeToChanges } from "./lib/storage";
+import { loadData, saveData, subscribeToChanges, onSaveResult } from "./lib/storage";
 import { isSupabaseConfigured } from "./lib/supabase";
 import { isAuthEnabled, getSession, onAuthChange, signOut } from "./lib/auth";
 import Login from "./components/Login";
@@ -77,6 +77,18 @@ export default function App() {
     });
     return () => { cancelled = true; };
   }, [authChecked, authed]);
+
+  // Surface database save failures -- otherwise the UI says "Synced" while
+  // changes only exist in this browser's local cache.
+  useEffect(() => {
+    onSaveResult((ok) => {
+      setSyncStatus((prev) => {
+        if (!ok) return "save-error";
+        return prev === "save-error" ? "connected" : prev;
+      });
+    });
+    return () => onSaveResult(null);
+  }, []);
 
   // Subscribe to real-time changes from other users
   useEffect(() => {
@@ -170,19 +182,23 @@ export default function App() {
   }
 
   const syncLabel =
-    syncStatus === "connected"
-      ? "Synced"
-      : syncStatus === "updated"
-        ? "Updated just now"
-        : isSupabaseConfigured()
-          ? "Connecting..."
-          : "Local only";
+    syncStatus === "save-error"
+      ? "Save failed — not shared!"
+      : syncStatus === "connected"
+        ? "Synced"
+        : syncStatus === "updated"
+          ? "Updated just now"
+          : isSupabaseConfigured()
+            ? "Connecting..."
+            : "Local only";
   const syncColor =
-    syncStatus === "connected"
-      ? "#16A34A"
-      : syncStatus === "updated"
-        ? "#2563EB"
-        : "#94A3B8";
+    syncStatus === "save-error"
+      ? "#DC2626"
+      : syncStatus === "connected"
+        ? "#16A34A"
+        : syncStatus === "updated"
+          ? "#2563EB"
+          : "#94A3B8";
 
   return (
     <div
