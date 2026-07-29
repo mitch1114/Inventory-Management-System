@@ -131,19 +131,22 @@ export function parseAccOrderWriter(sheetData) {
   if (!headerInfo) return null;
   const { headerRow, cols } = headerInfo;
 
-  // Dealer vs distributor: scan the header area for the program-type text
-  // (its cell has moved between template versions).
-  let isDistributor = false;
+  // Program type (dealer / distributor / buying group): scan the header area
+  // for the program-type text (its cell has moved between template versions).
+  let fileType = "dealer";
   for (let i = 0; i < headerRow; i++) {
     const row = sheetData[i];
     if (!row) continue;
     const text = row.map((c) => String(c == null ? "" : c)).join(" ").toUpperCase();
+    if (text.includes("BUYING GROUP")) {
+      fileType = "buying-group";
+      break;
+    }
     if (text.includes("DISTRIBUTOR PROGRAM") || text.includes("DISTRIBUTOR PRO")) {
-      isDistributor = true;
+      fileType = "distributor";
       break;
     }
   }
-  const fileType = isDistributor ? "distributor" : "dealer";
 
   const customerName = findLabeledValue(sheetData, "CUSTOMER NAME", headerRow);
   const orderDateRaw = findLabeledValue(sheetData, "ORDER DATE", headerRow);
@@ -182,9 +185,11 @@ export function parseAccOrderWriter(sheetData) {
 
   const col = (row, idx) => (idx === -1 || idx == null ? undefined : row[idx]);
 
-  // Parse product rows -- stop importing at the Replacement Tips section.
+  // Parse product rows. Replacement tips are orderable line items (2027+
+  // writers give them quantity/cost columns), so the tips section is parsed
+  // like any other rows -- only its heading marker is skipped.
   const products = [];
-  let inReplacementSection = false;
+  const looksLikeUpc = (s) => /^\d{11,14}$/.test(s);
 
   for (let i = headerRow + 1; i < sheetData.length; i++) {
     const row = sheetData[i];
@@ -192,21 +197,26 @@ export function parseAccOrderWriter(sheetData) {
 
     const rowText = row.map((c) => String(c == null ? "" : c)).join(" ").toUpperCase();
 
-    // Section markers / program notes can appear in any column depending on
+    // Section headings / program notes can appear in any column depending on
     // template version, so match against the whole row.
-    if (rowText.includes("REPLACEMENT TIP PRICING")) {
-      inReplacementSection = true;
-      continue;
-    }
-    if (inReplacementSection) continue;
+    if (rowText.includes("REPLACEMENT TIP PRICING")) continue;
 
-    const sku = cellStr(col(row, cols.sku));
+    let sku = cellStr(col(row, cols.sku));
+    let upc = cellStr(col(row, cols.upc)).replace(/\.0$/, "");
+
+    // Some sections keep the older column order within a newer file (e.g. the
+    // 2027 distributor writer's tips section has SKU/UPC swapped relative to
+    // the file's own header). If the SKU cell is a barcode and the UPC cell
+    // looks like a part number, swap them.
+    if (looksLikeUpc(sku) && upc && !looksLikeUpc(upc) && upc.toUpperCase() !== "N/A") {
+      [sku, upc] = [upc, sku];
+    }
+
     if (!sku) continue; // category headers, notes, spacer rows
 
     // Skip note rows that carry text in the SKU column in some layouts
     if (rowText.includes("FREE TIP") || rowText.includes("BUY 9") || rowText.includes("BUY 18")) continue;
 
-    const upc = cellStr(col(row, cols.upc)).replace(/\.0$/, "");
     if (upc.toUpperCase() === "N/A") continue; // replacement-tip duplicates in the product area
 
     const qtyRaw = col(row, cols.qty);
@@ -263,7 +273,7 @@ export function detectAccFormat(sheetData) {
     const row = sheetData[i];
     if (!row) continue;
     const text = row.map((c) => String(c == null ? "" : c)).join(" ").toUpperCase();
-    if (text.includes("DEALER PROGRAM") || text.includes("DISTRIBUTOR PROGRAM")) return true;
+    if (text.includes("DEALER PROGRAM") || text.includes("DISTRIBUTOR PROGRAM") || text.includes("BUYING GROUP PROGRAM")) return true;
   }
 
   // Secondary: ACC structural markers -- the product table header (PRODUCT CODE
