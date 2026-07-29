@@ -244,6 +244,38 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     }));
   };
 
+  // --- Permanent delete: removes the order from ALL sales data (lists, counts,
+  // revenue, fill rate). Unlike Cancel, no record remains except an audit entry.
+  const deleteOrder = () => {
+    const shippedWarning =
+      order.fulfillmentStage === "shipped"
+        ? "\n\nThis order was SHIPPED -- deleting removes its revenue and history from every report (on-hand stock is NOT restored)."
+        : order.fulfillmentStage !== "cancelled"
+          ? "\n\nAny inventory locked by this order will be released."
+          : "";
+    if (
+      !confirm(
+        `PERMANENTLY DELETE ${order.orderNum} (${order.customer})?${shippedWarning}\n\nThis cannot be undone.`,
+      )
+    )
+      return;
+    setData((d) => ({
+      ...d,
+      salesOrders: d.salesOrders.filter((o) => o.id !== order.id),
+      auditLog: [
+        ...(d.auditLog || []),
+        {
+          id: uid(),
+          ts: nowIso(),
+          type: "adjustment",
+          entity: order.orderNum,
+          description: `Deleted ${order.orderNum} (${order.customer}) -- ${order.lines.length} lines, stage was ${order.fulfillmentStage}`,
+        },
+      ],
+    }));
+    onClose();
+  };
+
   // --- CSV export ---
   const exportCSV = () => {
     const rows = order.lines.map((l) => {
@@ -567,6 +599,9 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
             <button style={BP} onClick={handleStageClick}>
               {STAGE_BTN[order.fulfillmentStage]} &rarr;
             </button>
+            <button style={BD} onClick={deleteOrder}>
+              Delete Order
+            </button>
             <button style={BD} onClick={cancelOrder}>
               Cancel Order
             </button>
@@ -583,9 +618,22 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
               fontSize: 13,
               color: "#B91C1C",
               fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
             }}
           >
-            This order has been cancelled.
+            <span style={{ flex: 1 }}>This order has been cancelled.</span>
+            <button style={{ ...BD, whiteSpace: "nowrap" }} onClick={deleteOrder}>
+              Delete Order
+            </button>
+          </div>
+        )}
+        {isShipped && (
+          <div style={{ marginBottom: 18, display: "flex", justifyContent: "flex-end" }}>
+            <button style={BD} onClick={deleteOrder}>
+              Delete Order
+            </button>
           </div>
         )}
 
