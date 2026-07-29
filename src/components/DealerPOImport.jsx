@@ -216,7 +216,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
               return;
             }
             setParsedMeta(meta);
-            setChannel(meta.fileType === "distributor" ? "distributor" : "dealer");
+            setChannel(["distributor", "buying-group"].includes(meta.fileType) ? meta.fileType : "dealer");
             setRequestedShipDate(meta.shipDate || "");
             setSpecialInstructions(meta.comments || "");
             setDealerInfo({
@@ -804,11 +804,11 @@ export default function DealerPOImport({ data, setData, onClose }) {
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A" }}>
-                ACC Order Writer -- {parsedMeta.fileType === "distributor" ? "Distributor" : "Dealer"} PO
+                ACC Order Writer -- {parsedMeta.fileType === "distributor" ? "Distributor" : parsedMeta.fileType === "buying-group" ? "Buying Group" : "Dealer"} PO
               </div>
               <Badge
-                status={parsedMeta.fileType === "distributor" ? "distributor" : "dealer"}
-                label={parsedMeta.fileType === "distributor" ? "Distributor" : "Dealer"}
+                status={parsedMeta.fileType || "dealer"}
+                label={parsedMeta.fileType === "distributor" ? "Distributor" : parsedMeta.fileType === "buying-group" ? "Buying Group" : "Dealer"}
               />
             </div>
 
