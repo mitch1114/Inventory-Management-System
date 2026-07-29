@@ -135,3 +135,47 @@ export async function fetchInvoices({ startDate, maxResults } = {}) {
 
   return res.json();
 }
+
+// --- Create invoice ------------------------------------------------------------
+// Auto-creates a QBO invoice for an order (called when an order reaches
+// "Picked & Packed"). Never throws: returns { skipped: true } when QBO isn't
+// connected and { success: false } on any error, so callers can fire-and-forget.
+export async function createInvoiceForOrder(order, prodMap) {
+  if (!isQboConnected()) return { skipped: true };
+
+  try {
+    const tokens = await ensureFreshToken();
+
+    const lines = order.lines
+      .map((l) => {
+        const prod = prodMap[l.productId];
+        return {
+          sku: prod ? prod.sku : "",
+          name: prod ? prod.name : "",
+          qty: l.qtyFilled != null ? l.qtyFilled : l.qty,
+          rate: l.price || 0,
+        };
+      })
+      .filter((l) => l.qty > 0);
+
+    if (lines.length === 0) return { success: false, reason: "no-lines" };
+
+    const res = await fetch("/api/qbo/create-invoice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accessToken: tokens.accessToken,
+        realmId: tokens.realmId,
+        customerName: order.customer,
+        orderNum: order.orderNum,
+        date: (order.date || "").slice(0, 10),
+        lines,
+      }),
+    });
+
+    if (!res.ok) return { success: false };
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}

@@ -3,7 +3,8 @@ import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS } from ".
 import { computeInventory, advanceStage, resolveBackorders } from "../lib/inventory";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
-import { isQboConnected, fetchInvoices } from "../lib/qbo";
+import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo";
+import { pushOrder } from "../lib/shipstation";
 import { sendShippedEmail } from "../lib/notify";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
@@ -75,6 +76,7 @@ function buildQboInvoiceCSV(orders, prodMap) {
 function OrderDrawer({ order, data, setData, onClose, onEdit }) {
   const [shipModal, setShipModal] = useState(false);
   const [boPolicy, setBoPolicy] = useState("kill"); // what to do with backorders at ship time
+  const [autoStatus, setAutoStatus] = useState(""); // ShipStation / QBO automation status message
   const [shipForm, setShipForm] = useState({
     carrier: "",
     trackingNum: "",
@@ -116,9 +118,83 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
   );
 
   // --- Stage advance ---
+  const showAutoStatus = (msg) => {
+    setAutoStatus(msg);
+    setTimeout(() => setAutoStatus(""), 6000);
+  };
+
+  // Same picked-stage automation as PipelineView: push to ShipStation when the
+  // order reaches "picked" (fallback at "booked" for orders not yet pushed) and
+  // auto-create a QBO invoice. Fire-and-forget -- never blocks the advance.
+  const runStageAutomation = (stage) => {
+    const advancedOrder = { ...order, fulfillmentStage: stage };
+
+    if ((stage === "picked" || stage === "booked") && !order.shipstationOrderId) {
+      pushOrder(advancedOrder, data.products, data.customers)
+        .then((result) => {
+          if (result.success) {
+            showAutoStatus(`Pushed ${order.orderNum} to ShipStation`);
+            setData((d) => ({
+              ...d,
+              salesOrders: d.salesOrders.map((so) =>
+                so.id === order.id
+                  ? { ...so, shipstationOrderId: result.shipstationOrderId }
+                  : so,
+              ),
+              auditLog: [
+                ...(d.auditLog || []),
+                {
+                  id: uid(),
+                  ts: nowIso(),
+                  type: "shipstation-push",
+                  entity: order.orderNum,
+                  description: `Pushed ${order.orderNum} to ShipStation (ID: ${result.shipstationOrderId})`,
+                },
+              ],
+            }));
+          } else {
+            showAutoStatus(`ShipStation push failed: ${result.error || "Unknown error"}`);
+          }
+        })
+        .catch((err) => showAutoStatus(`ShipStation push failed: ${err.message}`));
+    }
+
+    if (stage === "picked" && isQboConnected() && !order.qboInvoice) {
+      createInvoiceForOrder(advancedOrder, prodMap).then((result) => {
+        if (result && result.success) {
+          const skippedNote =
+            result.skippedSkus && result.skippedSkus.length > 0
+              ? ` -- skipped SKUs with no QBO item: ${result.skippedSkus.join(", ")}`
+              : "";
+          setData((d) => ({
+            ...d,
+            salesOrders: d.salesOrders.map((so) =>
+              so.id === order.id
+                ? { ...so, qboInvoice: { ...result.invoice, status: "open" } }
+                : so,
+            ),
+            auditLog: [
+              ...(d.auditLog || []),
+              {
+                id: uid(),
+                ts: nowIso(),
+                type: "qbo-invoice",
+                entity: order.orderNum,
+                description: `Created QBO invoice #${result.invoice.docNumber} for ${order.orderNum} (unsent draft)${skippedNote}`,
+              },
+            ],
+          }));
+        } else if (result && !result.skipped) {
+          showAutoStatus("QBO invoice creation failed -- create manually");
+        }
+      });
+    }
+  };
+
   const doAdvance = (info) => {
     if (!nextStage) return;
     setData((d) => advanceStage(d, order.id, nextStage, info || null));
+    runStageAutomation(nextStage);
   };
 
   const handleStageClick = () => {
@@ -263,6 +339,24 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
 
       {/* Body */}
       <div style={{ flex: 1, overflow: "auto", padding: "18px 22px" }}>
+        {/* ShipStation / QBO automation status */}
+        {autoStatus && (
+          <div
+            style={{
+              background: autoStatus.includes("failed") ? "#FEF2F2" : "#F0FDF4",
+              border: `1px solid ${autoStatus.includes("failed") ? "#FECACA" : "#BBF7D0"}`,
+              borderRadius: 10,
+              padding: "8px 14px",
+              marginBottom: 14,
+              fontSize: 12,
+              fontWeight: 600,
+              color: autoStatus.includes("failed") ? "#DC2626" : "#15803D",
+            }}
+          >
+            {autoStatus}
+          </div>
+        )}
+
         {/* Order info grid */}
         <div
           style={{

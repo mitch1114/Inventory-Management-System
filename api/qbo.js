@@ -6,12 +6,14 @@ import auth from "../server/qbo/auth.js";
 import callback from "../server/qbo/callback.js";
 import refresh from "../server/qbo/refresh.js";
 import invoices from "../server/qbo/invoices.js";
+import createInvoice from "../server/qbo/create-invoice.js";
 
 const ROUTES = {
   auth,
   callback,
   refresh,
   invoices,
+  "create-invoice": createInvoice,
 };
 
 export default function handler(req, res) {
