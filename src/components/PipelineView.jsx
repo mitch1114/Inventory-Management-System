@@ -6,6 +6,7 @@ import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
+import { isQboConnected, createInvoiceForOrder } from "../lib/qbo";
 import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { sendShippedEmail } from "../lib/notify";
 import HelpPanel from "./HelpPanel";
@@ -228,12 +229,60 @@ export default function PipelineView({ data, setData }) {
 
     setAdvModal(null);
 
-    // Auto-push to ShipStation when order reaches "booked"
-    if (next === "booked") {
+    // Snapshot of the order as it exists after the advance -- for "picked" this
+    // merges the adjusted pick quantities so downstream pushes see real fills.
+    const advancedOrder = { ...o, fulfillmentStage: next };
+    if (next === "picked" && adjusted) {
+      const adjMap = {};
+      adjusted.forEach((a) => { adjMap[a.productId] = a.qtyFilled; });
+      advancedOrder.lines = o.lines.map((l) => {
+        if (adjMap[l.productId] == null) return l;
+        const newFilled = Math.max(0, Math.min(l.qty, adjMap[l.productId]));
+        return { ...l, qtyFilled: newFilled, qtyBackordered: l.qty - newFilled };
+      });
+    }
+
+    // Auto-create a QBO invoice when order reaches "booked" -- fire-and-forget,
+    // never blocks the advance. Silently skipped when QBO isn't connected.
+    if (next === "booked" && isQboConnected() && !o.qboInvoice) {
+      createInvoiceForOrder(advancedOrder, prodMap).then((result) => {
+        if (result && result.success) {
+          const skippedNote =
+            result.skippedSkus && result.skippedSkus.length > 0
+              ? ` -- skipped SKUs with no QBO item: ${result.skippedSkus.join(", ")}`
+              : "";
+          setData((d) => ({
+            ...d,
+            salesOrders: d.salesOrders.map((so) =>
+              so.id === o.id
+                ? { ...so, qboInvoice: { ...result.invoice, status: "open" } }
+                : so,
+            ),
+            auditLog: [
+              ...(d.auditLog || []),
+              {
+                id: uid(),
+                ts: nowIso(),
+                type: "qbo-invoice",
+                entity: o.orderNum,
+                description: `Created QBO invoice #${result.invoice.docNumber} for ${o.orderNum} (unsent draft)${skippedNote}`,
+              },
+            ],
+          }));
+        } else if (result && !result.skipped) {
+          setSsStatus("QBO invoice creation failed -- create manually");
+          setTimeout(() => setSsStatus(""), 6000);
+        }
+      });
+    }
+
+    // Auto-push to ShipStation when order reaches "picked" (kept at "booked" as
+    // a fallback for orders that weren't pushed). Guarded so nothing pushes twice.
+    if ((next === "picked" || next === "booked") && !o.shipstationOrderId) {
       setSsPushing(true);
       setSsStatus("");
       try {
-        const result = await pushOrder(o, data.products);
+        const result = await pushOrder(advancedOrder, data.products, data.customers);
         if (result.success) {
           setSsStatus(`Pushed ${o.orderNum} to ShipStation`);
           // Store ShipStation order ID on the order
@@ -390,7 +439,7 @@ export default function PipelineView({ data, setData }) {
           </span>
         )}
         <span style={{ marginLeft: "auto", fontSize: 10, color: "#94A3B8" }}>
-          Orders auto-push at Booked
+          Orders auto-push at Picked &amp; Packed
         </span>
       </div>
 
@@ -1038,6 +1087,28 @@ export default function PipelineView({ data, setData }) {
                   These will auto-fill when inventory is received via Supplier POs.
                 </div>
               )}
+
+              {/* Automation note: ShipStation push at Picked; QBO invoice at Booked */}
+              <div
+                style={{
+                  background: "#ECFEFF",
+                  border: "1px solid #A5F3FC",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  marginBottom: 16,
+                  fontSize: 12,
+                  color: "#0891B2",
+                }}
+              >
+                On advance, this order is <strong>automatically pushed to ShipStation</strong>
+                {isQboConnected() && (
+                  <span>
+                    ; a <strong>QuickBooks invoice</strong> is created (unsent draft) when it
+                    reaches Shipment Booked
+                  </span>
+                )}
+                .
+              </div>
             </div>
           )}
 
@@ -1077,8 +1148,17 @@ export default function PipelineView({ data, setData }) {
                   color: "#0891B2",
                 }}
               >
-                This order will be <strong>automatically pushed to ShipStation</strong> for
-                label creation and shipment tracking.
+                {advModal.shipstationOrderId ? (
+                  <span>
+                    Already in ShipStation (SS #{advModal.shipstationOrderId}) -- no
+                    second push will occur.
+                  </span>
+                ) : (
+                  <span>
+                    This order will be <strong>automatically pushed to ShipStation</strong> for
+                    label creation and shipment tracking.
+                  </span>
+                )}
               </div>
             </div>
           )}

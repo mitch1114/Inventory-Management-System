@@ -524,6 +524,55 @@ export default function Settings({ data, setData }) {
           </table>
         </div>
 
+        {/* Scheduled sync */}
+        <div
+          style={{
+            background: "#FFFFFF",
+            border: "1px solid #E2E8F0",
+            borderRadius: 10,
+            padding: "14px 18px",
+            marginBottom: 18,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 8 }}>
+            Scheduled Sync
+          </div>
+          <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.7, marginBottom: 8 }}>
+            Inventory is also pulled from ShipStation automatically at <strong>6am and 10pm Central</strong> via
+            a Vercel Cron job -- no button click needed. During winter (standard time) the runs shift one hour,
+            and on the Vercel Hobby plan cron timing can drift within the hour.
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <tbody>
+              <tr style={{ borderBottom: "1px solid #F1F5F9" }}>
+                <td style={{ padding: "8px 0", fontFamily: "monospace", fontWeight: 600, color: "#7C3AED" }}>
+                  SUPABASE_URL
+                </td>
+                <td style={{ padding: "8px 0", color: "#64748B" }}>
+                  <strong>Required.</strong> Your Supabase project URL (Supabase &rarr; Project Settings &rarr; API)
+                </td>
+              </tr>
+              <tr style={{ borderBottom: "1px solid #F1F5F9" }}>
+                <td style={{ padding: "8px 0", fontFamily: "monospace", fontWeight: 600, color: "#7C3AED" }}>
+                  SUPABASE_SERVICE_ROLE_KEY
+                </td>
+                <td style={{ padding: "8px 0", color: "#64748B" }}>
+                  <strong>Required.</strong> The <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>service_role</code>{" "}
+                  secret (Supabase &rarr; Project Settings &rarr; API) -- server-side only, never the anon key
+                </td>
+              </tr>
+              <tr>
+                <td style={{ padding: "8px 0", fontFamily: "monospace", fontWeight: 600, color: "#7C3AED" }}>
+                  CRON_SECRET
+                </td>
+                <td style={{ padding: "8px 0", color: "#64748B" }}>
+                  <strong>Optional.</strong> When set, cron requests must send it as a Bearer token -- blocks outside callers
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
         {/* Test V2 connection */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
           <button

@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { LOCKING } from "../lib/constants";
 import { autoAllocate } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso } from "../lib/utils";
+import { LANDED_COST_TYPES } from "../lib/landedCost";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BG, BAq } from "./ui";
 import SupplierPOImport from "./SupplierPOImport";
 import ReceivingModal from "./ReceivingModal";
@@ -26,6 +27,7 @@ export default function PurchaseOrders({ data, setData }) {
   const [search, setSearch] = useState("");
   const [showImport, setShowImport] = useState(false);
   const [receiving, setReceiving] = useState(null); // PO being received
+  const [viewing, setViewing] = useState(null); // PO shown in detail popup
 
   // Derived lookups
   const prodMap = useMemo(
@@ -220,7 +222,12 @@ export default function PurchaseOrders({ data, setData }) {
           return (
             <TR key={po.id} i={i}>
               <TD mono accent="#6D28D9">
-                {po.orderNum}
+                <span
+                  style={{ cursor: "pointer", textDecoration: "underline" }}
+                  onClick={() => setViewing(po)}
+                >
+                  {po.orderNum}
+                </span>
               </TD>
               <TD>{supp ? supp.name : "--"}</TD>
               <TD>{fmtDate(po.date)}</TD>
@@ -235,6 +242,12 @@ export default function PurchaseOrders({ data, setData }) {
               <TD mono>{fmt(total)}</TD>
               <TD>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    style={{ ...BS, padding: "5px 10px", fontSize: 11 }}
+                    onClick={() => setViewing(po)}
+                  >
+                    View
+                  </button>
                   <button
                     style={{ ...BS, padding: "5px 10px", fontSize: 11 }}
                     onClick={() => openEdit(po)}
@@ -421,6 +434,207 @@ export default function PurchaseOrders({ data, setData }) {
           </div>
         </Modal>
       )}
+
+      {/* PO Detail Popup */}
+      {viewing &&
+        (() => {
+          const supp = suppMap[viewing.supplierId];
+          const rows = viewing.lines.map((l) => {
+            const prod = prodMap[l.productId];
+            const ordered = l.qty || 0;
+            const received = l.qtyReceived || 0;
+            return {
+              sku: prod ? prod.sku : l.sku || "--",
+              name: prod ? prod.name : l.desc || "--",
+              ordered,
+              received,
+              remaining: Math.max(0, ordered - received),
+              cost: l.cost || 0,
+              landed: l.landedUnitCost,
+              ext: ordered * (l.cost || 0),
+            };
+          });
+          const totals = rows.reduce(
+            (t, r) => ({
+              ordered: t.ordered + r.ordered,
+              received: t.received + r.received,
+              remaining: t.remaining + r.remaining,
+              ext: t.ext + r.ext,
+            }),
+            { ordered: 0, received: 0, remaining: 0, ext: 0 },
+          );
+          const landedEntries = (viewing.landedCosts || []).filter(
+            (c) => (parseFloat(c.amount) || 0) > 0,
+          );
+          const landedLabel = Object.fromEntries(
+            LANDED_COST_TYPES.map((t) => [t.value, t.label]),
+          );
+          const lbl = {
+            fontSize: 11,
+            fontWeight: 600,
+            color: "#64748B",
+            textTransform: "uppercase",
+            letterSpacing: "0.07em",
+            marginBottom: 4,
+          };
+          const val = { fontSize: 13, color: "#0F172A", fontWeight: 600 };
+          const canReceive = viewing.status === "ordered" || viewing.status === "partial";
+          return (
+            <Modal
+              title={`Purchase Order ${viewing.orderNum}`}
+              onClose={() => setViewing(null)}
+              width={860}
+            >
+              {/* Header info */}
+              <div
+                style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}
+              >
+                <span
+                  style={{
+                    fontFamily: "monospace",
+                    fontWeight: 800,
+                    fontSize: 16,
+                    color: "#6D28D9",
+                  }}
+                >
+                  {viewing.orderNum}
+                </span>
+                <Badge status={viewing.status} label={viewing.status} />
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(4, 1fr)",
+                  gap: "0 18px",
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <div style={lbl}>Supplier</div>
+                  <div style={val}>{supp ? supp.name : "--"}</div>
+                </div>
+                <div>
+                  <div style={lbl}>Order Date</div>
+                  <div style={val}>{fmtDate(viewing.date)}</div>
+                </div>
+                <div>
+                  <div style={lbl}>Expected</div>
+                  <div style={val}>
+                    {viewing.expectedDate ? fmtDate(viewing.expectedDate) : "--"}
+                  </div>
+                </div>
+                {viewing.receivedDate && (
+                  <div>
+                    <div style={lbl}>Received</div>
+                    <div style={val}>{fmtDate(viewing.receivedDate)}</div>
+                  </div>
+                )}
+              </div>
+
+              {viewing.notes && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={lbl}>Notes</div>
+                  <div style={{ fontSize: 13, color: "#374151" }}>{viewing.notes}</div>
+                </div>
+              )}
+
+              {/* Landed cost summary */}
+              {(landedEntries.length > 0 || viewing.landedTotal > 0) && (
+                <div
+                  style={{
+                    background: "#F5F3FF",
+                    border: "1px solid #DDD6FE",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    marginBottom: 14,
+                    fontSize: 12,
+                    color: "#5B21B6",
+                  }}
+                >
+                  <strong>Landed costs:</strong>{" "}
+                  {landedEntries
+                    .map(
+                      (c) =>
+                        `${landedLabel[c.type] || c.type} ${fmt(parseFloat(c.amount) || 0)}`,
+                    )
+                    .join(" · ")}
+                  {landedEntries.length > 0 ? " -- " : ""}
+                  total <strong>{fmt(viewing.landedTotal || 0)}</strong> allocated across
+                  received units
+                </div>
+              )}
+
+              {/* Line items */}
+              <Table
+                headers={[
+                  "SKU",
+                  "Product",
+                  "Ordered",
+                  "Received",
+                  "Remaining",
+                  "Unit Cost",
+                  "Landed Unit",
+                  "Ext",
+                ]}
+                empty={rows.length === 0 ? "No line items on this PO." : null}
+              >
+                {rows.map((r, i) => (
+                  <TR key={i} i={i}>
+                    <TD mono>{r.sku}</TD>
+                    <TD>{r.name}</TD>
+                    <TD mono>{fmtNum(r.ordered)}</TD>
+                    <TD mono>{fmtNum(r.received)}</TD>
+                    <TD mono>{fmtNum(r.remaining)}</TD>
+                    <TD mono>{fmt(r.cost)}</TD>
+                    <TD mono>{r.landed != null ? fmt(r.landed) : "--"}</TD>
+                    <TD mono>{fmt(r.ext)}</TD>
+                  </TR>
+                ))}
+                {rows.length > 0 && (
+                  <TR i={rows.length}>
+                    <TD s={{ fontWeight: 700, color: "#0F172A" }}>Totals</TD>
+                    <TD />
+                    <TD mono s={{ fontWeight: 700, color: "#0F172A" }}>
+                      {fmtNum(totals.ordered)}
+                    </TD>
+                    <TD mono s={{ fontWeight: 700, color: "#0F172A" }}>
+                      {fmtNum(totals.received)}
+                    </TD>
+                    <TD mono s={{ fontWeight: 700, color: "#0F172A" }}>
+                      {fmtNum(totals.remaining)}
+                    </TD>
+                    <TD />
+                    <TD />
+                    <TD mono s={{ fontWeight: 700, color: "#0F172A" }}>
+                      {fmt(totals.ext)}
+                    </TD>
+                  </TR>
+                )}
+              </Table>
+
+              {/* Footer */}
+              <div
+                style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}
+              >
+                <button style={BS} onClick={() => setViewing(null)}>
+                  Close
+                </button>
+                {canReceive && (
+                  <button
+                    style={BG}
+                    onClick={() => {
+                      setViewing(null);
+                      receivePO(viewing);
+                    }}
+                  >
+                    Receive Items
+                  </button>
+                )}
+              </div>
+            </Modal>
+          );
+        })()}
 
       {/* Supplier PO Import */}
       {showImport && (
