@@ -95,7 +95,7 @@ export default async function handler(req, res) {
         CustomerRef: { value: customer.Id },
         TxnDate: date,
         DocNumber: orderNum,
-        PrivateNote: `Auto-created from ${orderNum} at Picked & Packed`,
+        PrivateNote: `Auto-created from ${orderNum} at Shipment Booked`,
         Line: invoiceLines,
       }),
     });

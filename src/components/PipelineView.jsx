@@ -242,9 +242,9 @@ export default function PipelineView({ data, setData }) {
       });
     }
 
-    // Auto-create a QBO invoice when order reaches "picked" -- fire-and-forget,
+    // Auto-create a QBO invoice when order reaches "booked" -- fire-and-forget,
     // never blocks the advance. Silently skipped when QBO isn't connected.
-    if (next === "picked" && isQboConnected() && !o.qboInvoice) {
+    if (next === "booked" && isQboConnected() && !o.qboInvoice) {
       createInvoiceForOrder(advancedOrder, prodMap).then((result) => {
         if (result && result.success) {
           const skippedNote =
@@ -1088,7 +1088,7 @@ export default function PipelineView({ data, setData }) {
                 </div>
               )}
 
-              {/* Automation note: ShipStation push + QBO invoice at Picked */}
+              {/* Automation note: ShipStation push at Picked; QBO invoice at Booked */}
               <div
                 style={{
                   background: "#ECFEFF",
@@ -1103,7 +1103,8 @@ export default function PipelineView({ data, setData }) {
                 On advance, this order is <strong>automatically pushed to ShipStation</strong>
                 {isQboConnected() && (
                   <span>
-                    {" "}and a <strong>QuickBooks invoice</strong> is created as an unsent draft
+                    ; a <strong>QuickBooks invoice</strong> is created (unsent draft) when it
+                    reaches Shipment Booked
                   </span>
                 )}
                 .

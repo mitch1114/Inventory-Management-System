@@ -123,7 +123,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     setTimeout(() => setAutoStatus(""), 6000);
   };
 
-  // Same picked-stage automation as PipelineView: push to ShipStation when the
+  // Same stage automation as PipelineView: push to ShipStation when the
   // order reaches "picked" (fallback at "booked" for orders not yet pushed) and
   // auto-create a QBO invoice. Fire-and-forget -- never blocks the advance.
   const runStageAutomation = (stage) => {
@@ -159,7 +159,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
         .catch((err) => showAutoStatus(`ShipStation push failed: ${err.message}`));
     }
 
-    if (stage === "picked" && isQboConnected() && !order.qboInvoice) {
+    if (stage === "booked" && isQboConnected() && !order.qboInvoice) {
       createInvoiceForOrder(advancedOrder, prodMap).then((result) => {
         if (result && result.success) {
           const skippedNote =
