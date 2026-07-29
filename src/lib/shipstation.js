@@ -23,14 +23,22 @@ export async function testConnection() {
  * @param {Array} products - Full products array for SKU lookup
  * @returns {{ success: bool, shipstationOrderId?: number, error?: string }}
  */
-export async function pushOrder(order, products) {
+export async function pushOrder(order, products, customers) {
   try {
     // Enrich lines with SKU + product name for ShipStation
     const prodMap = {};
     products.forEach((p) => { prodMap[p.id] = p; });
 
+    // Pull recipient contact details from the customer record when available
+    const cust = (customers || []).find(
+      (c) => c.name.toLowerCase().trim() === String(order.customer || "").toLowerCase().trim(),
+    );
+
     const enrichedOrder = {
       ...order,
+      address: order.address || (cust ? cust.address : ""),
+      customerEmail: cust ? cust.email : "",
+      customerPhone: cust ? cust.phone : "",
       lines: order.lines.map((l) => {
         const prod = prodMap[l.productId];
         return {

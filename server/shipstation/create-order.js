@@ -27,27 +27,43 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing order data" });
     }
 
+    // Best-effort split of a one-line address ("123 Main St, Kilgore, TX 75662")
+    // into the structured fields ShipStation needs for label creation.
+    const parseAddress = (str) => {
+      const parts = String(str || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const last = parts.length ? parts[parts.length - 1] : "";
+      const m = last.match(/^([A-Za-z]{2})\.?\s+(\d{5}(?:-\d{4})?)$/);
+      if (m && parts.length >= 3) {
+        return {
+          street1: parts.slice(0, parts.length - 2).join(", "),
+          city: parts[parts.length - 2],
+          state: m[1].toUpperCase(),
+          postalCode: m[2],
+        };
+      }
+      return { street1: String(str || ""), city: "", state: "", postalCode: "" };
+    };
+    const billAddr = parseAddress(order.address || "");
+    const shipAddr = parseAddress(order.shipToAddr || order.address || "");
+
     // Build ShipStation order payload
     const ssOrder = {
       orderNumber: order.orderNum,
       orderDate: order.date || new Date().toISOString().slice(0, 10),
       orderStatus: "awaiting_shipment",
       customerUsername: order.customer || "Unknown",
+      customerEmail: order.customerEmail || undefined,
       billTo: {
         name: order.customer || "Unknown",
-        street1: order.address || "",
-        city: "",
-        state: "",
-        postalCode: "",
+        ...billAddr,
         country: "US",
+        phone: order.customerPhone || "",
       },
       shipTo: {
         name: order.shipTo || order.customer || "Unknown",
-        street1: order.shipToAddr || order.address || "",
-        city: "",
-        state: "",
-        postalCode: "",
+        ...shipAddr,
         country: "US",
+        phone: order.customerPhone || "",
       },
       items: (order.lines || []).map((l) => ({
         sku: l.sku || "",
