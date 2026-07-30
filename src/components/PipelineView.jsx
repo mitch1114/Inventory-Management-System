@@ -36,6 +36,7 @@ const PICK_VERIFY_HELP = [
 
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
+  const [detailOrder, setDetailOrder] = useState(null); // order detail / print pick sheet popup
   const [showInventory, setShowInventory] = useState(false); // live-inventory table collapsed by default
   const [boPolicy, setBoPolicy] = useState("kill"); // what to do with backorders at ship time
   const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso() });
@@ -167,6 +168,67 @@ export default function PipelineView({ data, setData }) {
       setPickScanning(false);
     }
   }, [skuToProdId, prodMap, advModal]);
+
+  // Print a clean pick sheet for an order in a new window (no app chrome).
+  const printPickSheet = (o) => {
+    const esc = (s) =>
+      String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const rows = o.lines
+      .map((l) => {
+        const p = prodMap[l.productId];
+        const qty = l.qtyFilled != null ? l.qtyFilled : l.qty;
+        if (qty <= 0) return "";
+        return `<tr>
+          <td class="chk">&#9744;</td>
+          <td class="mono">${esc(p ? p.sku : "?")}</td>
+          <td>${esc(p ? p.name : "--")}</td>
+          <td class="mono">${esc(p && p.upc ? p.upc : "")}</td>
+          <td class="qty">${qty}</td>
+          <td class="line"></td>
+        </tr>`;
+      })
+      .join("");
+    const totalUnits = o.lines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0);
+    const html = `<!DOCTYPE html><html><head><title>Pick Sheet ${esc(o.orderNum)}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; margin: 32px; color: #111; }
+  h1 { font-size: 22px; margin: 0 0 2px; } .sub { color: #555; font-size: 13px; margin-bottom: 14px; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; font-size: 13px; margin-bottom: 14px; }
+  .meta b { display: inline-block; min-width: 110px; }
+  .note { border: 1px solid #ccc; background: #f7f7f7; padding: 8px 10px; font-size: 13px; margin-bottom: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #999; padding: 7px 8px; text-align: left; }
+  th { background: #eee; font-size: 11px; text-transform: uppercase; }
+  .chk { width: 28px; text-align: center; font-size: 16px; }
+  .mono { font-family: monospace; }
+  .qty { width: 60px; text-align: center; font-weight: bold; font-size: 15px; }
+  .line { width: 90px; }
+  .totals { margin-top: 10px; font-size: 14px; font-weight: bold; }
+  .sig { margin-top: 36px; display: flex; gap: 40px; font-size: 13px; }
+  .sig span { border-top: 1px solid #111; padding-top: 4px; flex: 1; }
+</style></head><body>
+<h1>PICK SHEET &mdash; ${esc(o.orderNum)}</h1>
+<div class="sub">ACC Crappie Stix &middot; printed ${new Date().toLocaleString()}</div>
+<div class="meta">
+  <div><b>Customer:</b> ${esc(o.customer)}</div>
+  <div><b>PO Ref:</b> ${esc(o.dealerPORef || "--")}</div>
+  <div><b>Order date:</b> ${esc(fmtDate(o.date))}</div>
+  <div><b>Requested ship:</b> ${esc(o.requestedShipDate ? fmtDate(o.requestedShipDate) : "--")}</div>
+</div>
+${o.specialInstructions ? `<div class="note"><b>Special Instructions:</b> ${esc(o.specialInstructions)}</div>` : ""}
+${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
+<table><thead><tr><th></th><th>SKU</th><th>Product</th><th>UPC</th><th>Qty</th><th>Picked</th></tr></thead>
+<tbody>${rows}</tbody></table>
+<div class="totals">Total: ${o.lines.length} lines &middot; ${totalUnits} units</div>
+<div class="sig"><span>Picked by</span><span>Checked by</span><span>Date</span></div>
+<script>window.onload = function(){ window.print(); };</script>
+</body></html>`;
+    const w = window.open("", "_blank");
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+    }
+  };
 
   // Open the advance modal -- initialize pickQtys for confirmed->picked transition
   const openAdvance = (o) => {
@@ -525,7 +587,19 @@ export default function PipelineView({ data, setData }) {
                       }}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                        <span style={{ fontSize: 12, fontWeight: 800, color: "#6D28D9", fontFamily: "monospace" }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 800,
+                            color: "#6D28D9",
+                            fontFamily: "monospace",
+                            cursor: "pointer",
+                            textDecoration: "underline",
+                            textDecorationColor: "#DDD6FE",
+                            textUnderlineOffset: 2,
+                          }}
+                          onClick={() => setDetailOrder(o)}
+                        >
                           {o.orderNum}
                         </span>
                         {hasBO && <Badge status="backordered" label="Has BO" />}
@@ -738,6 +812,61 @@ export default function PipelineView({ data, setData }) {
         </table>
         )}
       </div>
+
+      {/* Order detail / print popup -- view everything without advancing the stage */}
+      {detailOrder && (
+        <Modal
+          title={`${detailOrder.orderNum} — ${detailOrder.customer}`}
+          onClose={() => setDetailOrder(null)}
+          width={640}
+        >
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 20px", fontSize: 13, marginBottom: 14 }}>
+            <div><span style={{ color: "#94A3B8" }}>Stage:</span> <Badge status={detailOrder.fulfillmentStage} label={STAGE_LABEL[detailOrder.fulfillmentStage]} /></div>
+            <div><span style={{ color: "#94A3B8" }}>PO Ref:</span> <span style={{ fontFamily: "monospace" }}>{detailOrder.dealerPORef || "--"}</span></div>
+            <div><span style={{ color: "#94A3B8" }}>Order date:</span> {fmtDate(detailOrder.date)}</div>
+            <div><span style={{ color: "#94A3B8" }}>Requested ship:</span> {detailOrder.requestedShipDate ? fmtDate(detailOrder.requestedShipDate) : "--"}</div>
+          </div>
+          {detailOrder.specialInstructions && (
+            <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400E", marginBottom: 10 }}>
+              <strong>Special Instructions:</strong> {detailOrder.specialInstructions}
+            </div>
+          )}
+          {detailOrder.notes && (
+            <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#475569", marginBottom: 10 }}>
+              <strong>Notes:</strong> {detailOrder.notes}
+            </div>
+          )}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 12 }}>
+            <thead>
+              <tr style={{ background: "#F1F5F9" }}>
+                {["SKU", "Product", "Qty", "Filled", "BO"].map((h) => (
+                  <th key={h} style={{ padding: "6px 10px", textAlign: h === "SKU" || h === "Product" ? "left" : "right", color: "#64748B", fontSize: 10, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {detailOrder.lines.map((l, i) => {
+                const p = prodMap[l.productId];
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid #F1F5F9" }}>
+                    <td style={{ padding: "6px 10px", fontFamily: "monospace", fontSize: 11, color: "#6D28D9" }}>{p ? p.sku : "?"}</td>
+                    <td style={{ padding: "6px 10px", color: "#334155" }}>{p ? p.name : "--"}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700 }}>{l.qty}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: "#15803D" }}>{l.qtyFilled != null ? l.qtyFilled : l.qty}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: (l.qtyBackordered || 0) > 0 ? "#DC2626" : "#94A3B8" }}>{l.qtyBackordered || "--"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <button style={BS} onClick={() => setDetailOrder(null)}>Close</button>
+            <button style={BP} onClick={() => printPickSheet(detailOrder)}>
+              Print Pick Sheet
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {advModal && (
         <Modal
