@@ -138,7 +138,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
               ...d,
               salesOrders: d.salesOrders.map((so) =>
                 so.id === order.id
-                  ? { ...so, shipstationOrderId: result.shipstationOrderId }
+                  ? { ...so, shipstationOrderId: result.shipstationOrderId, ssOrderNumber: result.orderNumber }
                   : so,
               ),
               auditLog: [

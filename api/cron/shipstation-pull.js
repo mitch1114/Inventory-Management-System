@@ -47,6 +47,37 @@ export default async function handler(req, res) {
     }
 
     const data = row.data;
+
+    // --- Automatic snapshot backup (runs even if the ShipStation pull fails
+    // below). Keeps the last 30 snapshots (~15 days at twice daily) in the
+    // app_state_backups table -- the restore point against accidental wipes
+    // or data corruption, since the Supabase free tier has no backups.
+    let backedUp = false;
+    try {
+      const { error: buError } = await supabase
+        .from("app_state_backups")
+        .insert({ ts: new Date().toISOString(), data });
+      if (!buError) {
+        backedUp = true;
+        // prune: delete everything older than the newest 30
+        const { data: old } = await supabase
+          .from("app_state_backups")
+          .select("id")
+          .order("ts", { ascending: false })
+          .range(30, 1000);
+        if (old && old.length > 0) {
+          await supabase
+            .from("app_state_backups")
+            .delete()
+            .in("id", old.map((r) => r.id));
+        }
+      } else {
+        console.error("Snapshot backup failed (does app_state_backups exist?):", buError.message);
+      }
+    } catch (buErr) {
+      console.error("Snapshot backup failed:", buErr);
+    }
+
     const products = data.products || [];
     const skus = products.map((p) => p.sku).filter(Boolean);
 
@@ -109,7 +140,7 @@ export default async function handler(req, res) {
       );
     if (saveError) throw saveError;
 
-    return res.status(200).json({ ok: true, matched, unmatched, changed: changed.length });
+    return res.status(200).json({ ok: true, matched, unmatched, changed: changed.length, backedUp });
   } catch (err) {
     console.error("Scheduled ShipStation pull failed:", err);
     return res.status(200).json({ ok: false, reason: "error" });
