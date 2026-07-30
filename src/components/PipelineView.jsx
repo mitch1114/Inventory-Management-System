@@ -34,6 +34,17 @@ const PICK_VERIFY_HELP = [
   },
 ];
 
+// Board columns -- the last column merges "booked" and "shipped" so recent
+// shipments stay visible next to orders awaiting shipment. Stage logic
+// (STAGES / STAGE_NEXT) is unchanged; this only affects board rendering.
+const COLUMNS = [
+  { key: "confirmed", label: STAGE_LABEL.confirmed, stages: ["confirmed"] },
+  { key: "picked", label: STAGE_LABEL.picked, stages: ["picked"] },
+  { key: "bookedshipped", label: "Shipment Booked / Shipped", stages: ["booked", "shipped"] },
+];
+// Cap how many shipped cards render in the combined column
+const SHIPPED_DISPLAY_LIMIT = 15;
+
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
   const [detailOrder, setDetailOrder] = useState(null); // order detail / print pick sheet popup
@@ -352,7 +363,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
             ...d,
             salesOrders: d.salesOrders.map((so) =>
               so.id === o.id
-                ? { ...so, shipstationOrderId: result.shipstationOrderId }
+                ? { ...so, shipstationOrderId: result.shipstationOrderId, ssOrderNumber: result.orderNumber }
                 : so,
             ),
             auditLog: [
@@ -388,7 +399,10 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     setSsSyncing(true);
     setSsStatus("Syncing with ShipStation...");
     try {
-      const orderNums = bookedOrders.map((o) => o.orderNum);
+      // ShipStation order numbers are the dealer PO ref when available -- prefer
+      // the number stored at push time, then the PO ref, then our order number.
+      const ssNumFor = (o) => o.ssOrderNumber || o.dealerPORef || o.orderNum;
+      const orderNums = bookedOrders.map(ssNumFor);
       const result = await syncShipments(orderNums);
       if (result.success && result.shipments && result.shipments.length > 0) {
         // Auto-advance shipped orders and apply tracking info
@@ -396,7 +410,11 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
           let updated = { ...d };
           const logs = [];
           for (const s of result.shipments) {
-            const order = updated.salesOrders.find((o) => o.orderNum === s.orderNumber && o.fulfillmentStage === "booked");
+            const order = updated.salesOrders.find(
+              (o) =>
+                (o.ssOrderNumber || o.dealerPORef || o.orderNum) === s.orderNumber &&
+                o.fulfillmentStage === "booked",
+            );
             if (!order) continue;
             const shipInfo = {
               carrier: s.carrier || "",
@@ -429,6 +447,24 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     setSsSyncing(false);
     setTimeout(() => setSsStatus(""), 6000);
   }, [data.salesOrders, data.products, setData]);
+
+  // Auto-sync tracking from ShipStation -- once on mount, then every 5 minutes
+  // while the tab is mounted. A ref keeps the interval pointed at the latest
+  // sync closure without resetting the timer on every data change.
+  const autoSyncRef = useRef(() => {});
+  useEffect(() => {
+    autoSyncRef.current = () => {
+      if (!data.salesOrders.some((o) => o.fulfillmentStage === "booked")) return;
+      try {
+        Promise.resolve(doSyncShipments()).catch(() => {});
+      } catch (_) {}
+    };
+  }, [data.salesOrders, doSyncShipments]);
+  useEffect(() => {
+    autoSyncRef.current();
+    const id = setInterval(() => autoSyncRef.current(), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Pick modal stats
   const pickTotalOrdered = advModal ? advModal.lines.reduce((s, l) => s + l.qty, 0) : 0;
@@ -501,27 +537,36 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
           </span>
         )}
         <span style={{ marginLeft: "auto", fontSize: 10, color: "#94A3B8" }}>
-          Orders auto-push at Picked &amp; Packed
+          Orders auto-push at Picked &amp; Packed &middot; tracking auto-syncs
         </span>
       </div>
 
       {/* Kanban columns */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
-        {STAGES.map((stage) => {
-          const col = SCOL[stage];
-          const orders = stageOrders[stage] || [];
-          const units = orders.reduce(
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
+        {COLUMNS.map((colDef) => {
+          const col = SCOL[colDef.stages[0]];
+          // Header aggregates cover every order in all of the column's stages
+          const allOrders = colDef.stages.flatMap((s) => stageOrders[s] || []);
+          // Cards shown: booked first, then shipped capped to the most recent
+          const orders = colDef.stages.flatMap((s) => {
+            const list = stageOrders[s] || [];
+            if (s !== "shipped") return list;
+            return [...list]
+              .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+              .slice(0, SHIPPED_DISPLAY_LIMIT);
+          });
+          const units = allOrders.reduce(
             (s, o) => s + o.lines.reduce((ls, l) => ls + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0),
             0,
           );
-          const value = orders.reduce(
+          const value = allOrders.reduce(
             (s, o) =>
               s + o.lines.reduce((ls, l) => ls + (l.qtyFilled != null ? l.qtyFilled : l.qty) * l.price, 0),
             0,
           );
           return (
             <div
-              key={stage}
+              key={colDef.key}
               style={{
                 background: "#FFFFFF",
                 border: "1px solid #E2E8F0",
@@ -539,7 +584,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: col, flexShrink: 0 }} />
                   <span style={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>
-                    {STAGE_LABEL[stage]}
+                    {colDef.label}
                   </span>
                   <span
                     style={{
@@ -553,12 +598,12 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                       fontWeight: 700,
                     }}
                   >
-                    {orders.length}
+                    {allOrders.length}
                   </span>
                 </div>
                 <div style={{ fontSize: 11, color: "#64748B" }}>
                   {fmtNum(units)} units &middot; {fmt(value)}
-                  {LOCKING.has(stage) ? " (locked)" : ""}
+                  {colDef.stages.every((s) => LOCKING.has(s)) ? " (locked)" : ""}
                 </div>
               </div>
               <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 8, minHeight: 100 }}>
@@ -575,6 +620,8 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                   const hasBO = o.lines.some(
                     (l) => (l.qtyBackordered != null ? l.qtyBackordered : 0) > 0,
                   );
+                  const stage = o.fulfillmentStage;
+                  const cardCol = SCOL[stage];
                   const next = STAGE_NEXT[stage];
                   return (
                     <div
@@ -602,6 +649,9 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                         >
                           {o.orderNum}
                         </span>
+                        {colDef.stages.length > 1 && (
+                          <Badge status={stage} label={STAGE_LABEL[stage]} />
+                        )}
                         {hasBO && <Badge status="backordered" label="Has BO" />}
                         {o.type === "preorder" && !hasBO && <Badge status="preorder" label="Pre-order" />}
                       </div>
@@ -680,9 +730,9 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                             width: "100%",
                             padding: "6px",
                             borderRadius: 7,
-                            border: `1px solid ${col}55`,
-                            background: col + "18",
-                            color: col,
+                            border: `1px solid ${cardCol}55`,
+                            background: cardCol + "18",
+                            color: cardCol,
                             fontWeight: 700,
                             fontSize: 11,
                             cursor: "pointer",
