@@ -1,7 +1,9 @@
-// --- Shipped-email notification helpers ----------------------------------------
-// Calls go through our Vercel API route (/api/notify/shipped) which keeps the
+// --- Email notification helpers -------------------------------------------------
+// Calls go through our Vercel API routes (/api/notify/*) which keep the
 // Resend API key in server-side environment variables only. Fire-and-forget:
-// this never throws, so a broken email setup can never block shipping.
+// these never throw, so a broken email setup can never block order workflow.
+
+import { STAGE_LABEL } from "./constants";
 
 /**
  * Send a "your order has shipped" email for an order.
@@ -37,6 +39,57 @@ export async function sendShippedEmail(order, customers) {
         trackingNum: shipment.trackingNum || "",
         shipDate: shipment.shipDate || "",
         itemsSummary,
+      }),
+    });
+    return await res.json();
+  } catch (_) {
+    return { sent: false };
+  }
+}
+
+/**
+ * Notify teammates when an order reaches a fulfillment stage, based on the
+ * configurable rules in Settings (data.notificationRules).
+ * @param {Object} order - Sales order (expects orderNum, dealerPORef, customer, lines)
+ * @param {string} stage - Stage just reached ("confirmed" | "picked" | "booked" | "shipped")
+ * @param {Array} rules - Notification rules ({ id, name, email, stage })
+ * @returns {{ sent?: boolean, skipped?: boolean, reason?: string }}
+ */
+export async function sendStageNotifications(order, stage, rules) {
+  try {
+    const matching = (rules || []).filter(
+      (r) => r.stage === stage && r.email && String(r.email).includes("@"),
+    );
+    if (matching.length === 0) return { skipped: true };
+
+    const lines = order.lines || [];
+    const units = lines.reduce(
+      (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty),
+      0,
+    );
+    const value = lines.reduce(
+      (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty) * (l.price || 0),
+      0,
+    );
+
+    const shipment = order.shipment || {};
+    const note =
+      stage === "shipped" && (shipment.carrier || shipment.trackingNum)
+        ? `Shipped via ${shipment.carrier || "?"}${shipment.trackingNum ? ` -- ${shipment.trackingNum}` : ""}`
+        : "";
+
+    const res = await fetch("/api/notify/stage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: matching.map((r) => r.email),
+        orderNum: order.orderNum,
+        poRef: order.dealerPORef || "",
+        customer: order.customer || "",
+        stageLabel: STAGE_LABEL[stage] || stage,
+        units,
+        value,
+        note,
       }),
     });
     return await res.json();

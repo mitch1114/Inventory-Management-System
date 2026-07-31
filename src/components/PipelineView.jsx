@@ -8,7 +8,7 @@ import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
 import { isQboConnected, createInvoiceForOrder } from "../lib/qbo";
 import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
-import { sendShippedEmail } from "../lib/notify";
+import { sendShippedEmail, sendStageNotifications } from "../lib/notify";
 import HelpPanel from "./HelpPanel";
 
 const PICK_VERIFY_HELP = [
@@ -315,6 +315,17 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       });
     }
 
+    // Fire-and-forget teammate stage notification -- never blocks the advance
+    try {
+      sendStageNotifications(
+        next === "shipped" ? { ...advancedOrder, shipment: shipForm } : advancedOrder,
+        next,
+        data.notificationRules,
+      );
+    } catch (_) {
+      /* ignore */
+    }
+
     // Auto-create a QBO invoice when order reaches "booked" -- fire-and-forget,
     // never blocks the advance. Silently skipped when QBO isn't connected.
     if (next === "booked" && isQboConnected() && !o.qboInvoice) {
@@ -435,6 +446,33 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
             auditLog: [...(updated.auditLog || []), ...logs],
           };
         });
+        // Fire-and-forget teammate notifications for orders auto-advanced to
+        // shipped -- matched outside the setData updater so nothing fires twice.
+        for (const s of result.shipments) {
+          const order = data.salesOrders.find(
+            (o) =>
+              (o.ssOrderNumber || o.dealerPORef || o.orderNum) === s.orderNumber &&
+              o.fulfillmentStage === "booked",
+          );
+          if (!order) continue;
+          try {
+            sendStageNotifications(
+              {
+                ...order,
+                fulfillmentStage: "shipped",
+                shipment: {
+                  carrier: s.carrier || "",
+                  trackingNum: s.trackingNum || "",
+                  shipDate: s.shipDate || todayIso(),
+                },
+              },
+              "shipped",
+              data.notificationRules,
+            );
+          } catch (_) {
+            /* ignore */
+          }
+        }
         setSsStatus(`Synced ${result.shipments.length} shipment${result.shipments.length !== 1 ? "s" : ""} from ShipStation`);
       } else if (result.success) {
         setSsStatus("No new shipments found");
@@ -446,7 +484,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     }
     setSsSyncing(false);
     setTimeout(() => setSsStatus(""), 6000);
-  }, [data.salesOrders, data.products, setData]);
+  }, [data.salesOrders, data.products, data.notificationRules, setData]);
 
   // Auto-sync tracking from ShipStation -- once on mount, then every 5 minutes
   // while the tab is mounted. A ref keeps the interval pointed at the latest

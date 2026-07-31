@@ -4,6 +4,7 @@ import { LOCKING, COL_ALIASES, CHANNELS } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow } from "../lib/utils";
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
+import { sendStageNotifications } from "../lib/notify";
 import { Modal, Field, Badge, IS, SS, BP, BS, BG } from "./ui";
 
 // --- Local StepTab component -------------------------------------------------
@@ -432,6 +433,14 @@ export default function DealerPOImport({ data, setData, onClose }) {
         ],
       };
     });
+
+    // Fire-and-forget teammate notification for the new Confirmed order --
+    // never blocks or fails the import.
+    try {
+      sendStageNotifications(order, "confirmed", data.notificationRules);
+    } catch (_) {
+      /* ignore */
+    }
 
     setStep("done");
   };
