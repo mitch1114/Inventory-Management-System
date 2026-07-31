@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { testConnection, testConnectionV2, getWarehouses, pullInventory, pushInventory } from "../lib/shipstation";
 import { defaultData, makeDemoData } from "../lib/defaultData";
+import { STAGES, STAGE_LABEL } from "../lib/constants";
 import { uid, nowIso, fmtDate } from "../lib/utils";
 import { connectQbo, fetchInvoices, isQboConnected, getQboTokens, clearQboTokens } from "../lib/qbo";
 import { BP, BS, BD, BG } from "./ui";
@@ -29,10 +30,59 @@ export default function Settings({ data, setData }) {
   const [qboImportResult, setQboImportResult] = useState(null);
   const [qboStartDate, setQboStartDate] = useState("");
 
+  // Team notification rules
+  const [ruleForm, setRuleForm] = useState({ name: "", email: "", stage: "confirmed" });
+  const [ruleError, setRuleError] = useState("");
+
   // Re-check connection status on mount (tokens may have been cleared)
   useEffect(() => {
     setQboConnected(isQboConnected());
   }, []);
+
+  const notificationRules = data.notificationRules || [];
+
+  const addRule = () => {
+    const name = ruleForm.name.trim();
+    const email = ruleForm.email.trim();
+    if (!email.includes("@")) {
+      setRuleError("Enter a valid email address.");
+      return;
+    }
+    const rule = { id: uid(), name, email, stage: ruleForm.stage };
+    setData((d) => ({
+      ...d,
+      notificationRules: [...(d.notificationRules || []), rule],
+      auditLog: [
+        ...(d.auditLog || []),
+        {
+          id: uid(),
+          ts: nowIso(),
+          type: "adjustment",
+          entity: "Notifications",
+          description: `Added notification rule: ${name || email} <${email}> on ${STAGE_LABEL[rule.stage] || rule.stage}`,
+        },
+      ],
+    }));
+    setRuleForm({ name: "", email: "", stage: "confirmed" });
+    setRuleError("");
+  };
+
+  const removeRule = (rule) => {
+    setData((d) => ({
+      ...d,
+      notificationRules: (d.notificationRules || []).filter((r) => r.id !== rule.id),
+      auditLog: [
+        ...(d.auditLog || []),
+        {
+          id: uid(),
+          ts: nowIso(),
+          type: "adjustment",
+          entity: "Notifications",
+          description: `Removed notification rule: ${rule.name || rule.email} <${rule.email}> on ${STAGE_LABEL[rule.stage] || rule.stage}`,
+        },
+      ],
+    }));
+  };
 
   const doConnectQbo = async () => {
     setQboConnecting(true);
@@ -1020,6 +1070,192 @@ export default function Settings({ data, setData }) {
             }}
           >
             No invoices found{qboStartDate ? ` since ${fmtDate(qboStartDate)}` : ""}. Try adjusting the date range.
+          </div>
+        )}
+      </div>
+
+      {/* Team Notifications */}
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 12,
+          padding: "20px 24px",
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: "#FFF7ED",
+              border: "1px solid #FED7AA",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 16,
+              fontWeight: 800,
+              color: "#EA580C",
+            }}
+          >
+            @
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A" }}>
+              Team Notifications
+            </div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>
+              Email teammates when orders reach a fulfillment stage
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            background: "#F8FAFC",
+            borderRadius: 10,
+            padding: "14px 18px",
+            marginBottom: 18,
+            fontSize: 12,
+            color: "#475569",
+            lineHeight: 1.7,
+          }}
+        >
+          Email a teammate when any order reaches a stage. Requires{" "}
+          <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>RESEND_API_KEY</code>{" "}
+          + <code style={{ background: "#E2E8F0", padding: "1px 6px", borderRadius: 4 }}>NOTIFY_FROM_EMAIL</code>{" "}
+          (same as customer shipped emails).
+        </div>
+
+        {/* Current rules */}
+        {notificationRules.length > 0 ? (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 14 }}>
+            <thead>
+              <tr style={{ background: "#F8FAFC" }}>
+                <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Name</th>
+                <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Email</th>
+                <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Stage</th>
+                <th style={{ padding: "8px 10px", width: 40 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {notificationRules.map((r, i) => (
+                <tr key={r.id || i} style={{ borderBottom: "1px solid #F1F5F9" }}>
+                  <td style={{ padding: "8px 10px", fontWeight: 600, color: "#0F172A" }}>
+                    {r.name || "--"}
+                  </td>
+                  <td style={{ padding: "8px 10px", fontFamily: "monospace", color: "#475569" }}>
+                    {r.email}
+                  </td>
+                  <td style={{ padding: "8px 10px", color: "#6D28D9", fontWeight: 600 }}>
+                    {STAGE_LABEL[r.stage] || r.stage}
+                  </td>
+                  <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                    <button
+                      onClick={() => removeRule(r)}
+                      title="Remove rule"
+                      style={{
+                        background: "#FEF2F2",
+                        border: "1px solid #FECACA",
+                        borderRadius: 6,
+                        width: 24,
+                        height: 24,
+                        color: "#DC2626",
+                        fontWeight: 700,
+                        fontSize: 13,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        lineHeight: 1,
+                      }}
+                    >
+                      &times;
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ fontSize: 12, color: "#94A3B8", marginBottom: 14 }}>
+            No notification rules yet. Add one below.
+          </div>
+        )}
+
+        {/* Add rule row */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            style={{
+              background: "#FFFFFF",
+              border: "1px solid #CBD5E1",
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontSize: 13,
+              color: "#0F172A",
+              fontFamily: "inherit",
+              width: 140,
+            }}
+            placeholder="Name"
+            value={ruleForm.name}
+            onChange={(e) => setRuleForm((f) => ({ ...f, name: e.target.value }))}
+          />
+          <input
+            style={{
+              background: "#FFFFFF",
+              border: "1px solid #CBD5E1",
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontSize: 13,
+              color: "#0F172A",
+              fontFamily: "inherit",
+              width: 220,
+            }}
+            type="email"
+            placeholder="teammate@company.com"
+            value={ruleForm.email}
+            onChange={(e) => setRuleForm((f) => ({ ...f, email: e.target.value }))}
+          />
+          <select
+            style={{
+              background: "#FFFFFF",
+              border: "1px solid #CBD5E1",
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontSize: 13,
+              color: "#0F172A",
+              fontFamily: "inherit",
+              cursor: "pointer",
+            }}
+            value={ruleForm.stage}
+            onChange={(e) => setRuleForm((f) => ({ ...f, stage: e.target.value }))}
+          >
+            {STAGES.map((s) => (
+              <option key={s} value={s}>
+                {STAGE_LABEL[s]}
+              </option>
+            ))}
+          </select>
+          <button style={BP} onClick={addRule}>
+            Add
+          </button>
+        </div>
+
+        {ruleError && (
+          <div
+            style={{
+              padding: "6px 14px",
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              background: "#FEF2F2",
+              color: "#B91C1C",
+              border: "1px solid #FECACA",
+              marginTop: 10,
+              display: "inline-block",
+            }}
+          >
+            {ruleError}
           </div>
         )}
       </div>

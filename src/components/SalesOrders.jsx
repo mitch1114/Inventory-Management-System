@@ -5,7 +5,7 @@ import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
 import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo";
 import { pushOrder } from "../lib/shipstation";
-import { sendShippedEmail } from "../lib/notify";
+import { sendShippedEmail, sendStageNotifications } from "../lib/notify";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
 
@@ -129,6 +129,15 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
   const runStageAutomation = (stage) => {
     const advancedOrder = { ...order, fulfillmentStage: stage };
 
+    // Fire-and-forget teammate stage notification -- never blocks the advance.
+    // The shipped path goes through confirmShip (which never calls this), so
+    // each transition notifies exactly once.
+    try {
+      sendStageNotifications(advancedOrder, stage, data.notificationRules);
+    } catch (_e) {
+      /* ignore */
+    }
+
     if ((stage === "picked" || stage === "booked") && !order.shipstationOrderId) {
       pushOrder(advancedOrder, data.products, data.customers)
         .then((result) => {
@@ -215,9 +224,20 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     // Resolve any outstanding backorders (fill & kill or split) before shipping
     setData((d) => advanceStage(resolveBackorders(d, order.id, boPolicy), order.id, "shipped", shipForm));
     setShipModal(false);
-    // Fire-and-forget shipped notification -- never block or fail the ship flow
+    // Fire-and-forget shipped notifications -- never block or fail the ship
+    // flow. confirmShip bypasses runStageAutomation, so the teammate "shipped"
+    // notification is sent here (exactly once per transition).
     try {
       sendShippedEmail({ ...order, shipment: shipForm }, data.customers);
+    } catch (_e) {
+      /* ignore */
+    }
+    try {
+      sendStageNotifications(
+        { ...order, fulfillmentStage: "shipped", shipment: shipForm },
+        "shipped",
+        data.notificationRules,
+      );
     } catch (_e) {
       /* ignore */
     }
