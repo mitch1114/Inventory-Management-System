@@ -185,11 +185,14 @@ export function parseAccOrderWriter(sheetData) {
 
   const col = (row, idx) => (idx === -1 || idx == null ? undefined : row[idx]);
 
-  // Parse product rows. Replacement tips are orderable line items (2027+
-  // writers give them quantity/cost columns), so the tips section is parsed
-  // like any other rows -- only its heading marker is skipped.
+  // Parse product rows. Replacement tips are orderable line items, so the
+  // tips section is parsed like any other rows -- only its heading marker is
+  // skipped. Inside the tips section, N/A UPCs are normal (2026 dealer
+  // writer) and some rows reuse the ROD's SKU for its tip, so tip SKUs are
+  // derived to keep them from importing as the rod itself.
   const products = [];
   const looksLikeUpc = (s) => /^\d{11,14}$/.test(s);
+  let inTipsSection = false;
 
   for (let i = headerRow + 1; i < sheetData.length; i++) {
     const row = sheetData[i];
@@ -199,10 +202,14 @@ export function parseAccOrderWriter(sheetData) {
 
     // Section headings / program notes can appear in any column depending on
     // template version, so match against the whole row.
-    if (rowText.includes("REPLACEMENT TIP PRICING")) continue;
+    if (rowText.includes("REPLACEMENT TIP PRICING")) {
+      inTipsSection = true;
+      continue;
+    }
 
     let sku = cellStr(col(row, cols.sku));
     let upc = cellStr(col(row, cols.upc)).replace(/\.0$/, "");
+    let desc = cellStr(col(row, cols.desc));
 
     // Some sections keep the older column order within a newer file (e.g. the
     // 2027 distributor writer's tips section has SKU/UPC swapped relative to
@@ -217,7 +224,16 @@ export function parseAccOrderWriter(sheetData) {
     // Skip note rows that carry text in the SKU column in some layouts
     if (rowText.includes("FREE TIP") || rowText.includes("BUY 9") || rowText.includes("BUY 18")) continue;
 
-    if (upc.toUpperCase() === "N/A") continue; // replacement-tip duplicates in the product area
+    if (upc.toUpperCase() === "N/A") {
+      if (!inTipsSection && !/replacement\s*tip/i.test(desc)) continue; // duplicates in the product area
+      upc = ""; // tips legitimately have no UPC in the 2026 dealer writer
+    }
+
+    // Tips listed under the rod's own SKU would import as the rod -- derive a
+    // -TIP SKU so they match tip products (or surface as unmatched) instead.
+    if ((inTipsSection || /replacement\s*tip/i.test(desc)) && !/-TIP$/i.test(sku)) {
+      sku = `${sku}-TIP`;
+    }
 
     const qtyRaw = col(row, cols.qty);
     let qtyNum = 0;
@@ -228,7 +244,7 @@ export function parseAccOrderWriter(sheetData) {
 
     products.push({
       sku,
-      desc: cellStr(col(row, cols.desc)),
+      desc,
       upc,
       qty: qtyNum,
       status: cellStr(col(row, cols.status)),

@@ -117,7 +117,16 @@ export default function DealerPOImport({ data, setData, onClose }) {
 
   const findProduct = (sku) => {
     if (!sku) return null;
-    return skuMap[String(sku).toLowerCase().trim()] || null;
+    const key = String(sku).toLowerCase().trim();
+    if (skuMap[key]) return skuMap[key];
+    // Tip SKU variants: order writers write e.g. SPS-762S-MF-C-TIP or
+    // JS-102-M-MS-SPG-TIP for the catalog's SPS-762S-MF-TIP / JS-102-M-MS-TIP
+    // (one tip fits both the C and SPG rod variants).
+    if (key.endsWith("-tip")) {
+      const normalized = key.replace(/-(c|spg)-tip$/, "-tip");
+      if (skuMap[normalized]) return skuMap[normalized];
+    }
+    return null;
   };
 
   // --- Build lines from raw data (used for auto-map and manual map) ----------
