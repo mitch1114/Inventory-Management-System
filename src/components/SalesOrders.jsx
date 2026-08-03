@@ -5,9 +5,10 @@ import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
 import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo";
 import { pushOrder } from "../lib/shipstation";
-import { sendShippedEmail, sendStageNotifications } from "../lib/notify";
+import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
+import OrderEditModal from "./OrderEditModal";
 
 // Display label for a sales channel value (falls back to the raw value)
 const channelLabel = (v) => {
@@ -131,9 +132,13 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
 
     // Fire-and-forget teammate stage notification -- never blocks the advance.
     // The shipped path goes through confirmShip (which never calls this), so
-    // each transition notifies exactly once.
+    // each transition notifies exactly once. Outcome is audit-logged so email
+    // failures aren't silent.
     try {
-      sendStageNotifications(advancedOrder, stage, data.notificationRules);
+      sendStageNotifications(advancedOrder, stage, data.notificationRules).then((r) => {
+        const entry = notifyAuditEntry(order.orderNum, stage, r);
+        if (entry) setData((d) => ({ ...d, auditLog: [...(d.auditLog || []), entry] }));
+      });
     } catch (_e) {
       /* ignore */
     }
@@ -237,7 +242,10 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
         { ...order, fulfillmentStage: "shipped", shipment: shipForm },
         "shipped",
         data.notificationRules,
-      );
+      ).then((r) => {
+        const entry = notifyAuditEntry(order.orderNum, "shipped", r);
+        if (entry) setData((d) => ({ ...d, auditLog: [...(d.auditLog || []), entry] }));
+      });
     } catch (_e) {
       /* ignore */
     }
@@ -887,26 +895,12 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
   );
 }
 
-// --- Blank order helpers -------------------------------------------------------
-const blankOrder = () => ({
-  customer: "",
-  date: todayIso(),
-  type: "standard",
-  dealerPORef: "",
-  lines: [],
-  shipment: {},
-  notes: "",
-});
-
-const blankLine = () => ({ productId: "", qty: 1, price: 0, qtyFilled: 0, qtyBackordered: 0 });
-
 // --- SalesOrders (main component) ----------------------------------------------
 export default function SalesOrders({ data, setData }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("all");
   const [selected, setSelected] = useState(null); // order object for drawer
-  const [editing, setEditing] = useState(null); // null | "new" | "preorder" | order object
-  const [form, setForm] = useState(blankOrder());
+  const [editingOrder, setEditingOrder] = useState(null); // order being edited
   const [showImport, setShowImport] = useState(false);
 
   // Invoice linking
@@ -919,16 +913,6 @@ export default function SalesOrders({ data, setData }) {
   const prodMap = useMemo(
     () => Object.fromEntries(data.products.map((p) => [p.id, p])),
     [data.products],
-  );
-
-  const computedProds = useMemo(
-    () => computeInventory(data.products, data.salesOrders),
-    [data.products, data.salesOrders],
-  );
-
-  const computedMap = useMemo(
-    () => Object.fromEntries(computedProds.map((p) => [p.id, p])),
-    [computedProds],
   );
 
   // --- Invoice linking helpers --------------------------------------------------
@@ -1003,127 +987,6 @@ export default function SalesOrders({ data, setData }) {
     return c;
   }, [data.salesOrders]);
 
-  // --- Open edit -----------------------------------------------------------------
-  // New orders are created exclusively through the dealer/distributor PO import
-  // (which offers regular vs pre-order); this modal remains for editing.
-  const openEdit = (order) => {
-    setForm({
-      customer: order.customer,
-      date: order.date,
-      type: order.type || "standard",
-      dealerPORef: order.dealerPORef || "",
-      lines: order.lines.map((l) => ({ ...l })),
-      shipment: order.shipment || {},
-      notes: order.notes || "",
-    });
-    setEditing(order);
-  };
-
-  // --- Save order ---------------------------------------------------------------
-  const save = () => {
-    if (editing === "new" || editing === "preorder") {
-      const num = (data.counters.so || 0) + 1;
-      const isPreorder = editing === "preorder";
-      const lines = form.lines
-        .filter((l) => l.productId)
-        .map((l) => {
-          if (isPreorder) {
-            // Pre-orders: everything goes to backorder
-            return {
-              ...l,
-              qtyFilled: 0,
-              qtyBackordered: l.qty,
-            };
-          }
-          // Standard: allocate from available
-          const cp = computedMap[l.productId];
-          const avail = cp ? cp.available : 0;
-          const filled = Math.min(l.qty, avail);
-          return {
-            ...l,
-            qtyFilled: filled,
-            qtyBackordered: l.qty - filled,
-          };
-        });
-      const so = {
-        id: uid(),
-        orderNum: `SO-${String(num).padStart(4, "0")}`,
-        customer: form.customer,
-        date: form.date,
-        fulfillmentStage: "confirmed",
-        type: isPreorder ? "preorder" : form.type,
-        dealerPORef: form.dealerPORef,
-        lines,
-        shipment: form.shipment || {},
-        notes: form.notes,
-      };
-      const lineTotal = lines.reduce(
-        (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty) * l.price,
-        0,
-      );
-      setData((d) => ({
-        ...d,
-        salesOrders: [...d.salesOrders, so],
-        counters: { ...d.counters, so: num },
-        auditLog: [
-          ...(d.auditLog || []),
-          {
-            id: uid(),
-            ts: nowIso(),
-            type: isPreorder ? "preorder" : "confirmed",
-            entity: so.orderNum,
-            description: `Created ${so.orderNum}${isPreorder ? " (pre-order)" : ""} -- ${form.customer} -- ${fmt(lineTotal)}`,
-          },
-        ],
-      }));
-    } else {
-      // Editing existing
-      setData((d) => ({
-        ...d,
-        salesOrders: d.salesOrders.map((o) =>
-          o.id === editing.id
-            ? {
-                ...o,
-                customer: form.customer,
-                date: form.date,
-                type: form.type,
-                dealerPORef: form.dealerPORef,
-                lines: form.lines.filter((l) => l.productId),
-                notes: form.notes,
-              }
-            : o,
-        ),
-        auditLog: [
-          ...(d.auditLog || []),
-          {
-            id: uid(),
-            ts: nowIso(),
-            type: "adjustment",
-            entity: editing.orderNum,
-            description: `Updated ${editing.orderNum}`,
-          },
-        ],
-      }));
-      // Refresh drawer if viewing same order
-      if (selected && selected.id === editing.id) {
-        const updated = data.salesOrders.find((o) => o.id === editing.id);
-        if (updated) setSelected({ ...updated, ...form, lines: form.lines.filter((l) => l.productId) });
-      }
-    }
-    setEditing(null);
-  };
-
-  // --- Line helpers --------------------------------------------------------------
-  const setLine = (idx, patch) =>
-    setForm((f) => ({
-      ...f,
-      lines: f.lines.map((l, i) => (i === idx ? { ...l, ...patch } : l)),
-    }));
-  const addLine = () =>
-    setForm((f) => ({ ...f, lines: [...f.lines, blankLine()] }));
-  const removeLine = (idx) =>
-    setForm((f) => ({ ...f, lines: f.lines.filter((_, i) => i !== idx) }));
-
   // --- CSV export all orders -----------------------------------------------------
   const exportQboCSV = () => {
     const csv = buildQboInvoiceCSV(filtered, prodMap);
@@ -1160,11 +1023,6 @@ export default function SalesOrders({ data, setData }) {
   };
 
   // --- Render -------------------------------------------------------------------
-  const formTotal = form.lines.reduce(
-    (s, l) => s + l.qty * l.price,
-    0,
-  );
-
   const filterTabs = [
     { key: "all", label: "All" },
     ...STAGES.map((s) => ({ key: s, label: STAGE_LABEL[s] })),
@@ -1401,190 +1259,21 @@ export default function SalesOrders({ data, setData }) {
             onClose={() => setSelected(null)}
             onEdit={() => {
               const latest = data.salesOrders.find((o) => o.id === selected.id) || selected;
-              openEdit(latest);
+              setEditingOrder(latest);
             }}
           />
         </>
       )}
 
-      {/* Create / Edit Modal */}
-      {editing && (
-        <Modal
-          title={
-            editing === "new"
-              ? "New Sales Order"
-              : editing === "preorder"
-                ? "New Pre-Order"
-                : `Edit ${editing.orderNum}`
-          }
-          onClose={() => setEditing(null)}
-          width={780}
-        >
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
-            <Field label="Customer">
-              <input
-                style={IS}
-                value={form.customer}
-                onChange={(e) => setForm((f) => ({ ...f, customer: e.target.value }))}
-                placeholder="Customer name"
-                list="customer-list"
-              />
-              <datalist id="customer-list">
-                {(data.customers || []).map((c) => (
-                  <option key={c.id} value={c.name} />
-                ))}
-              </datalist>
-            </Field>
-            <Field label="Order Date">
-              <input
-                style={IS}
-                type="date"
-                value={form.date}
-                onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-              />
-            </Field>
-            <Field label="Type">
-              <select
-                style={SS}
-                value={form.type}
-                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
-              >
-                <option value="standard">Standard</option>
-                <option value="distributor">Distributor</option>
-                <option value="dealer">Dealer</option>
-                <option value="retailer">Retailer</option>
-                <option value="preorder">Pre-Order</option>
-              </select>
-            </Field>
-            <Field label="Dealer PO Ref">
-              <input
-                style={IS}
-                value={form.dealerPORef}
-                onChange={(e) => setForm((f) => ({ ...f, dealerPORef: e.target.value }))}
-                placeholder="Optional"
-              />
-            </Field>
-          </div>
-
-          <Field label="Notes">
-            <textarea
-              style={{ ...IS, minHeight: 50, resize: "vertical" }}
-              value={form.notes}
-              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-            />
-          </Field>
-
-          {/* Line Items */}
-          <div
-            style={{
-              fontWeight: 700,
-              fontSize: 12,
-              color: "#64748B",
-              textTransform: "uppercase",
-              letterSpacing: "0.07em",
-              marginBottom: 8,
-              marginTop: 4,
-            }}
-          >
-            Line Items
-          </div>
-
-          {form.lines.map((line, idx) => {
-            const prod = prodMap[line.productId];
-            const cp = computedMap[line.productId];
-            return (
-              <div
-                key={idx}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "2fr 70px 90px auto",
-                  gap: 8,
-                  marginBottom: 6,
-                  alignItems: "center",
-                }}
-              >
-                <div>
-                  <select
-                    style={{ ...SS, fontSize: 12 }}
-                    value={line.productId}
-                    onChange={(e) => {
-                      const p = prodMap[e.target.value];
-                      setLine(idx, {
-                        productId: e.target.value,
-                        price: p ? p.sellPrice : 0,
-                      });
-                    }}
-                  >
-                    <option value="">-- product --</option>
-                    {data.products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.sku} -- {p.name}
-                      </option>
-                    ))}
-                  </select>
-                  {cp && (
-                    <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2, paddingLeft: 2 }}>
-                      {fmtNum(cp.available)} available
-                    </div>
-                  )}
-                </div>
-                <input
-                  style={{ ...IS, fontSize: 12 }}
-                  type="number"
-                  min="1"
-                  placeholder="Qty"
-                  value={line.qty}
-                  onChange={(e) => setLine(idx, { qty: Math.max(1, +e.target.value || 1) })}
-                />
-                <input
-                  style={{ ...IS, fontSize: 12 }}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="Price"
-                  value={line.price}
-                  onChange={(e) => setLine(idx, { price: +e.target.value || 0 })}
-                />
-                <button
-                  style={{ ...BD, padding: "6px 10px", fontSize: 11 }}
-                  onClick={() => removeLine(idx)}
-                >
-                  &times;
-                </button>
-              </div>
-            );
-          })}
-
-          <button style={{ ...BS, fontSize: 12, marginTop: 4 }} onClick={addLine}>
-            + Add Line
-          </button>
-
-          <div
-            style={{
-              textAlign: "right",
-              fontSize: 14,
-              fontWeight: 700,
-              color: "#0F172A",
-              marginTop: 12,
-            }}
-          >
-            Total: {fmt(formTotal)}
-          </div>
-
-          {/* Footer */}
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
-            <button style={BS} onClick={() => setEditing(null)}>
-              Cancel
-            </button>
-            <button style={BP} onClick={save} disabled={!form.customer}>
-              {editing === "new" || editing === "preorder"
-                ? editing === "preorder"
-                  ? "Create Pre-Order"
-                  : "Create Order"
-                : "Save Changes"}
-            </button>
-          </div>
-        </Modal>
+      {/* Edit Modal -- shared with the Order Board; handles re-allocating
+          filled/backordered quantities when lines change on a locked order */}
+      {editingOrder && (
+        <OrderEditModal
+          order={editingOrder}
+          data={data}
+          setData={setData}
+          onClose={() => setEditingOrder(null)}
+        />
       )}
 
       {/* Dealer PO Import */}

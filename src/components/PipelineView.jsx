@@ -8,7 +8,8 @@ import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
 import { pushOrder, syncShipments } from "../lib/shipstation";
 import { isQboConnected, createInvoiceForOrder } from "../lib/qbo";
 import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
-import { sendShippedEmail, sendStageNotifications } from "../lib/notify";
+import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
+import OrderEditModal from "./OrderEditModal";
 import HelpPanel from "./HelpPanel";
 
 const PICK_VERIFY_HELP = [
@@ -48,6 +49,7 @@ const SHIPPED_DISPLAY_LIMIT = 15;
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
   const [detailOrder, setDetailOrder] = useState(null); // order detail / print pick sheet popup
+  const [editOrder, setEditOrder] = useState(null); // order being edited (add lines / change qtys)
   const [showInventory, setShowInventory] = useState(false); // live-inventory table collapsed by default
   const [boPolicy, setBoPolicy] = useState("kill"); // what to do with backorders at ship time
   const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso() });
@@ -315,13 +317,17 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       });
     }
 
-    // Fire-and-forget teammate stage notification -- never blocks the advance
+    // Fire-and-forget teammate stage notification -- never blocks the advance.
+    // Outcome is audit-logged so email failures aren't silent.
     try {
       sendStageNotifications(
         next === "shipped" ? { ...advancedOrder, shipment: shipForm } : advancedOrder,
         next,
         data.notificationRules,
-      );
+      ).then((r) => {
+        const entry = notifyAuditEntry(o.orderNum, next, r);
+        if (entry) setData((d) => ({ ...d, auditLog: [...(d.auditLog || []), entry] }));
+      });
     } catch (_) {
       /* ignore */
     }
@@ -468,7 +474,10 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
               },
               "shipped",
               data.notificationRules,
-            );
+            ).then((r) => {
+              const entry = notifyAuditEntry(order.orderNum, "shipped", r);
+              if (entry) setData((d) => ({ ...d, auditLog: [...(d.auditLog || []), entry] }));
+            });
           } catch (_) {
             /* ignore */
           }
@@ -762,23 +771,44 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                       )}
 
                       {next && (
-                        <button
-                          onClick={() => openAdvance(o)}
-                          style={{
-                            width: "100%",
-                            padding: "6px",
-                            borderRadius: 7,
-                            border: `1px solid ${cardCol}55`,
-                            background: cardCol + "18",
-                            color: cardCol,
-                            fontWeight: 700,
-                            fontSize: 11,
-                            cursor: "pointer",
-                            fontFamily: "inherit",
-                          }}
-                        >
-                          {STAGE_BTN[stage]} &rarr;
-                        </button>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            onClick={() => openAdvance(o)}
+                            style={{
+                              flex: 1,
+                              padding: "6px",
+                              borderRadius: 7,
+                              border: `1px solid ${cardCol}55`,
+                              background: cardCol + "18",
+                              color: cardCol,
+                              fontWeight: 700,
+                              fontSize: 11,
+                              cursor: "pointer",
+                              fontFamily: "inherit",
+                            }}
+                          >
+                            {STAGE_BTN[stage]} &rarr;
+                          </button>
+                          {stage === "confirmed" && (
+                            <button
+                              onClick={() => setEditOrder(o)}
+                              title="Edit quantities or add line items"
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 7,
+                                border: "1px solid #E2E8F0",
+                                background: "#F8FAFC",
+                                color: "#64748B",
+                                fontWeight: 700,
+                                fontSize: 11,
+                                cursor: "pointer",
+                                fontFamily: "inherit",
+                              }}
+                            >
+                              Edit
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
@@ -948,12 +978,33 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
             </tbody>
           </table>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            {LOCKING.has(detailOrder.fulfillmentStage) && (
+              <button
+                style={{ ...BS, marginRight: "auto" }}
+                onClick={() => {
+                  setEditOrder(detailOrder);
+                  setDetailOrder(null);
+                }}
+              >
+                Edit Order
+              </button>
+            )}
             <button style={BS} onClick={() => setDetailOrder(null)}>Close</button>
             <button style={BP} onClick={() => printPickSheet(detailOrder)}>
               Print Pick Sheet
             </button>
           </div>
         </Modal>
+      )}
+
+      {/* Edit order (quantities / add line items) -- shared with Sales Orders */}
+      {editOrder && (
+        <OrderEditModal
+          order={data.salesOrders.find((o) => o.id === editOrder.id) || editOrder}
+          data={data}
+          setData={setData}
+          onClose={() => setEditOrder(null)}
+        />
       )}
 
       {advModal && (

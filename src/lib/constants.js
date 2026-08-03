@@ -54,6 +54,7 @@ export const SC = {
   "receiving-variance": { bg: "#FFFBEB", text: "#92400E", dot: "#F59E0B", border: "#FDE68A" },
   "cycle-count":   { bg: "#F0F9FF", text: "#0369A1", dot: "#0EA5E9", border: "#BAE6FD" },
   mispick:         { bg: "#FEF2F2", text: "#B91C1C", dot: "#DC2626", border: "#FECACA" },
+  notify:          { bg: "#FAF5FF", text: "#6D28D9", dot: "#7C3AED", border: "#DDD6FE" },
   hold:            { bg: "#FEFCE8", text: "#854D0E", dot: "#CA8A04", border: "#FDE68A" },
 };
 

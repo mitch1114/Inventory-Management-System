@@ -87,13 +87,22 @@ export default async function handler(req, res) {
     });
 
     if (!sendRes.ok) {
-      console.error(`Resend send failed for ${orderNum}: HTTP ${sendRes.status}`);
-      return res.status(200).json({ sent: false, reason: "send-failed" });
+      // Surface Resend's actual error (e.g. "domain is not verified") so the
+      // client can show WHY the send failed instead of a generic status code.
+      let detail = "";
+      try {
+        const body = await sendRes.json();
+        detail = (body && (body.message || body.error || body.name)) || JSON.stringify(body);
+      } catch (_) {
+        /* non-JSON error body */
+      }
+      console.error(`Resend send failed for ${orderNum}: HTTP ${sendRes.status} -- ${detail}`);
+      return res.status(200).json({ sent: false, reason: `resend-http-${sendRes.status}`, detail });
     }
 
     return res.status(200).json({ sent: true });
   } catch (err) {
     console.error(`Resend send failed for ${orderNum}:`, err.message);
-    return res.status(200).json({ sent: false, reason: "send-failed" });
+    return res.status(200).json({ sent: false, reason: "send-failed", detail: err.message });
   }
 }
