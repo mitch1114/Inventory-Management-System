@@ -4,7 +4,7 @@ import { LOCKING, COL_ALIASES, CHANNELS } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow } from "../lib/utils";
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
-import { sendStageNotifications } from "../lib/notify";
+import { sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import { Modal, Field, Badge, IS, SS, BP, BS, BG } from "./ui";
 
 // --- Local StepTab component -------------------------------------------------
@@ -444,9 +444,13 @@ export default function DealerPOImport({ data, setData, onClose }) {
     });
 
     // Fire-and-forget teammate notification for the new Confirmed order --
-    // never blocks or fails the import.
+    // never blocks or fails the import. The outcome (sent or failed + why) is
+    // recorded in the audit log so silent email problems are visible.
     try {
-      sendStageNotifications(order, "confirmed", data.notificationRules);
+      sendStageNotifications(order, "confirmed", data.notificationRules).then((r) => {
+        const entry = notifyAuditEntry(order.orderNum, "confirmed", r);
+        if (entry) setData((d) => ({ ...d, auditLog: [...(d.auditLog || []), entry] }));
+      });
     } catch (_) {
       /* ignore */
     }

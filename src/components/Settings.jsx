@@ -4,6 +4,7 @@ import { defaultData, makeDemoData } from "../lib/defaultData";
 import { STAGES, STAGE_LABEL } from "../lib/constants";
 import { uid, nowIso, fmtDate } from "../lib/utils";
 import { connectQbo, fetchInvoices, isQboConnected, getQboTokens, clearQboTokens } from "../lib/qbo";
+import { sendTestStageEmail } from "../lib/notify";
 import { BP, BS, BD, BG } from "./ui";
 
 export default function Settings({ data, setData }) {
@@ -33,6 +34,8 @@ export default function Settings({ data, setData }) {
   // Team notification rules
   const [ruleForm, setRuleForm] = useState({ name: "", email: "", stage: "confirmed" });
   const [ruleError, setRuleError] = useState("");
+  const [ruleTesting, setRuleTesting] = useState(null); // rule id with a test send in flight
+  const [ruleTestResult, setRuleTestResult] = useState(null); // { rule, result } of last test
 
   // Re-check connection status on mount (tokens may have been cleared)
   useEffect(() => {
@@ -65,6 +68,18 @@ export default function Settings({ data, setData }) {
     }));
     setRuleForm({ name: "", email: "", stage: "confirmed" });
     setRuleError("");
+  };
+
+  // Send a real test email through /api/notify/stage and show the exact
+  // outcome -- the order flows swallow failures, so this is the way to see
+  // WHY a teammate isn't getting notifications (bad env vars, unverified
+  // Resend domain, typo'd address...).
+  const doTestRule = async (rule) => {
+    setRuleTesting(rule.id);
+    setRuleTestResult(null);
+    const result = await sendTestStageEmail(rule);
+    setRuleTesting(null);
+    setRuleTestResult({ rule, result });
   };
 
   const removeRule = (rule) => {
@@ -1137,6 +1152,7 @@ export default function Settings({ data, setData }) {
                 <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Name</th>
                 <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Email</th>
                 <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "#64748B", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em" }}>Stage</th>
+                <th style={{ padding: "8px 10px", width: 60 }}></th>
                 <th style={{ padding: "8px 10px", width: 40 }}></th>
               </tr>
             </thead>
@@ -1151,6 +1167,27 @@ export default function Settings({ data, setData }) {
                   </td>
                   <td style={{ padding: "8px 10px", color: "#6D28D9", fontWeight: 600 }}>
                     {STAGE_LABEL[r.stage] || r.stage}
+                  </td>
+                  <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                    <button
+                      onClick={() => doTestRule(r)}
+                      disabled={ruleTesting != null}
+                      title="Send a test email to this address now"
+                      style={{
+                        background: "#EFF6FF",
+                        border: "1px solid #BFDBFE",
+                        borderRadius: 6,
+                        padding: "3px 10px",
+                        color: "#1D4ED8",
+                        fontWeight: 700,
+                        fontSize: 11,
+                        cursor: ruleTesting != null ? "default" : "pointer",
+                        fontFamily: "inherit",
+                        opacity: ruleTesting != null && ruleTesting !== r.id ? 0.5 : 1,
+                      }}
+                    >
+                      {ruleTesting === r.id ? "Sending..." : "Test"}
+                    </button>
                   </td>
                   <td style={{ padding: "8px 10px", textAlign: "center" }}>
                     <button
@@ -1180,6 +1217,41 @@ export default function Settings({ data, setData }) {
         ) : (
           <div style={{ fontSize: 12, color: "#94A3B8", marginBottom: 14 }}>
             No notification rules yet. Add one below.
+          </div>
+        )}
+
+        {/* Test send outcome */}
+        {ruleTestResult && (
+          <div
+            style={{
+              padding: "10px 14px",
+              borderRadius: 8,
+              fontSize: 12,
+              marginBottom: 14,
+              background: ruleTestResult.result.sent ? "#F0FDF4" : "#FEF2F2",
+              border: `1px solid ${ruleTestResult.result.sent ? "#BBF7D0" : "#FECACA"}`,
+              color: ruleTestResult.result.sent ? "#15803D" : "#B91C1C",
+              lineHeight: 1.6,
+            }}
+          >
+            {ruleTestResult.result.sent ? (
+              <>
+                <strong>Test email sent</strong> to {ruleTestResult.rule.email}. Have them check
+                the inbox <em>and spam folder</em>. If it never arrives, the send was accepted by
+                Resend -- check the Resend dashboard logs for delivery status.
+              </>
+            ) : (
+              <>
+                <strong>Test email to {ruleTestResult.rule.email} FAILED</strong>
+                {ruleTestResult.result.reason ? <> -- {ruleTestResult.result.reason}</> : null}
+                {ruleTestResult.result.detail ? <>: {ruleTestResult.result.detail}</> : null}
+                <div style={{ marginTop: 4, color: "#7F1D1D" }}>
+                  {ruleTestResult.result.reason === "not-configured"
+                    ? "RESEND_API_KEY / NOTIFY_FROM_EMAIL are not set in Vercel -- add them under Project Settings -> Environment Variables."
+                    : "If the error mentions an unverified domain, the Resend DNS records still need to be added (pending with the dev agency). Until the domain verifies, Resend only delivers to the Resend account owner's own address."}
+                </div>
+              </>
+            )}
           </div>
         )}
 

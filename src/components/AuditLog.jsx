@@ -15,6 +15,7 @@ const LOG_TYPES = [
   { key: "receiving-variance", label: "Receiving Variance" },
   { key: "cycle-count", label: "Cycle Count" },
   { key: "mispick", label: "Mispick" },
+  { key: "notify", label: "Notification" },
 ];
 
 // --- Component ---------------------------------------------------------------
