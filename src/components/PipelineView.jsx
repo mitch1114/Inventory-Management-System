@@ -428,6 +428,35 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     setTimeout(() => setSsStatus(""), 15000);
   };
 
+  // Move a Picked & Packed order back to Confirmed -- for undoing a mistaken
+  // advance (or testing). Inventory locks are unchanged (both stages lock);
+  // the ShipStation link is cleared so the next advance re-pushes, which
+  // UPDATES the same ShipStation order (stable orderKey), never a duplicate.
+  const moveBackToConfirmed = (o) => {
+    const ssNote = o.shipstationOrderId
+      ? `\n\nIt was already pushed to ShipStation (#${o.shipstationOrderId}) -- advancing again will re-push and update that same ShipStation order.`
+      : "";
+    if (!confirm(`Move ${o.orderNum} (${o.customer}) back to Confirmed?${ssNote}`)) return;
+    setData((d) => ({
+      ...d,
+      salesOrders: d.salesOrders.map((so) =>
+        so.id === o.id
+          ? { ...so, fulfillmentStage: "confirmed", shipstationOrderId: undefined, ssOrderNumber: undefined }
+          : so,
+      ),
+      auditLog: [
+        ...(d.auditLog || []),
+        {
+          id: uid(),
+          ts: nowIso(),
+          type: "stage-advance",
+          entity: o.orderNum,
+          description: `Moved ${o.orderNum} back to Confirmed (${o.customer})${o.shipstationOrderId ? " -- ShipStation link cleared, will re-push on next advance" : ""}`,
+        },
+      ],
+    }));
+  };
+
   // Sync shipments from ShipStation -- checks booked orders for tracking updates
   const doSyncShipments = useCallback(async () => {
     const bookedOrders = data.salesOrders.filter((o) => o.fulfillmentStage === "booked");
@@ -855,6 +884,25 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                               }}
                             >
                               Edit
+                            </button>
+                          )}
+                          {stage === "picked" && (
+                            <button
+                              onClick={() => moveBackToConfirmed(o)}
+                              title="Move back to Confirmed (undo the pick)"
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 7,
+                                border: "1px solid #E2E8F0",
+                                background: "#F8FAFC",
+                                color: "#64748B",
+                                fontWeight: 700,
+                                fontSize: 11,
+                                cursor: "pointer",
+                                fontFamily: "inherit",
+                              }}
+                            >
+                              &larr; Back
                             </button>
                           )}
                         </div>

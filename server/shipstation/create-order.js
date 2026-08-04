@@ -101,6 +101,23 @@ export default async function handler(req, res) {
     const shipAddr = parseAddress(shipSource, order.customer);
     const billAddr = parseAddress(billSource, order.customer);
 
+    // Ship-to label format the warehouse wants: Full Name is the full customer
+    // name, and Company carries the receiving line with the dealer's PO number
+    // ("ATN Receiving PO# <dealerPORef>").
+    const atnCompany = order.dealerPORef ? `ATN Receiving PO# ${order.dealerPORef}` : "";
+    if (atnCompany) {
+      // The ATN line now lives in Company -- drop duplicate ATN/ATTN street
+      // lines that came in from the address on file, promoting real street
+      // lines up so street1 stays populated.
+      for (const k of ["street1", "street2", "street3"]) {
+        if (/^AT+N/i.test(shipAddr[k] || "")) shipAddr[k] = "";
+      }
+      const streets = [shipAddr.street1, shipAddr.street2, shipAddr.street3].filter(Boolean);
+      shipAddr.street1 = streets[0] || "";
+      shipAddr.street2 = streets[1] || "";
+      shipAddr.street3 = streets[2] || "";
+    }
+
     // Fail fast with a fixable message instead of letting ShipStation reject
     // an empty ship-to. The address comes from the customer record (or the
     // imported PO), so tell the user exactly where to fix it.
@@ -151,8 +168,8 @@ export default async function handler(req, res) {
         phone: order.customerPhone || "",
       },
       shipTo: {
-        name: order.shipTo || order.customer || "Unknown",
-        company: shipAddr.company || "",
+        name: order.customer || "Unknown",
+        company: atnCompany || shipAddr.company || "",
         street1: shipAddr.street1,
         street2: shipAddr.street2 || "",
         street3: shipAddr.street3 || "",
@@ -163,7 +180,9 @@ export default async function handler(req, res) {
         phone: order.customerPhone || "",
       },
       items,
-      customerNotes: order.notes || "",
+      // Order notes stay internal -- they are working notes, not something to
+      // print on ShipStation docs.
+      customerNotes: "",
       internalNotes: `Internal order: ${order.orderNum} | Type: ${order.type || "dealer"}`,
     };
 
