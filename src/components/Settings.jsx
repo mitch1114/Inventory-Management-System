@@ -1089,6 +1089,78 @@ export default function Settings({ data, setData }) {
         )}
       </div>
 
+      {/* Customer Emails */}
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 12,
+          padding: "20px 24px",
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: "#F0FDF4",
+              border: "1px solid #BBF7D0",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 16,
+              fontWeight: 800,
+              color: "#15803D",
+            }}
+          >
+            &#9993;
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A" }}>
+              Customer Shipped Emails
+            </div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>
+              Email the customer their tracking info when an order is marked Shipped.
+              Off by default -- flip on when the email content is ready.
+            </div>
+          </div>
+          <button
+            onClick={() =>
+              setData((d) => ({
+                ...d,
+                customerShippedEmails: !d.customerShippedEmails,
+                auditLog: [
+                  ...(d.auditLog || []),
+                  {
+                    id: uid(),
+                    ts: nowIso(),
+                    type: "notify",
+                    entity: "Settings",
+                    description: `Customer shipped emails turned ${!d.customerShippedEmails ? "ON" : "OFF"}`,
+                  },
+                ],
+              }))
+            }
+            style={{
+              padding: "8px 18px",
+              borderRadius: 10,
+              border: `1px solid ${data.customerShippedEmails ? "#BBF7D0" : "#E2E8F0"}`,
+              background: data.customerShippedEmails ? "#F0FDF4" : "#F8FAFC",
+              color: data.customerShippedEmails ? "#15803D" : "#64748B",
+              fontWeight: 700,
+              fontSize: 12,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {data.customerShippedEmails ? "ON -- customers get emails" : "OFF -- no customer emails"}
+          </button>
+        </div>
+      </div>
+
       {/* Team Notifications */}
       <div
         style={{

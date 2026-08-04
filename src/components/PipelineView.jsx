@@ -295,8 +295,10 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       return result;
     });
 
-    // Fire-and-forget shipped-email notification -- never blocks the ship action
-    if (next === "shipped") {
+    // Fire-and-forget shipped-email notification -- never blocks the ship
+    // action. Customer emails are gated behind the Settings toggle (off by
+    // default); teammate stage notifications below are unaffected.
+    if (next === "shipped" && data.customerShippedEmails) {
       try {
         sendShippedEmail({ ...o, shipment: shipForm }, data.customers);
       } catch (_) {}
