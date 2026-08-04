@@ -167,7 +167,23 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
               ],
             }));
           } else {
-            showAutoStatus(`ShipStation push failed: ${result.error || "Unknown error"}`);
+            // Surface the full reason and audit-log it -- a swallowed push
+            // failure leaves the order missing from ShipStation silently.
+            const why = `${result.error || "Unknown error"}${result.detail ? ` -- ${result.detail}` : ""}`;
+            showAutoStatus(`ShipStation push failed: ${why}`);
+            setData((d) => ({
+              ...d,
+              auditLog: [
+                ...(d.auditLog || []),
+                {
+                  id: uid(),
+                  ts: nowIso(),
+                  type: "shipstation-push",
+                  entity: order.orderNum,
+                  description: `FAILED to push ${order.orderNum} to ShipStation: ${why}`,
+                },
+              ],
+            }));
           }
         })
         .catch((err) => showAutoStatus(`ShipStation push failed: ${err.message}`));

@@ -371,40 +371,61 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     // Auto-push to ShipStation when order reaches "picked" (kept at "booked" as
     // a fallback for orders that weren't pushed). Guarded so nothing pushes twice.
     if ((next === "picked" || next === "booked") && !o.shipstationOrderId) {
-      setSsPushing(true);
-      setSsStatus("");
-      try {
-        const result = await pushOrder(advancedOrder, data.products, data.customers);
-        if (result.success) {
-          setSsStatus(`Pushed ${o.orderNum} to ShipStation`);
-          // Store ShipStation order ID on the order
-          setData((d) => ({
-            ...d,
-            salesOrders: d.salesOrders.map((so) =>
-              so.id === o.id
-                ? { ...so, shipstationOrderId: result.shipstationOrderId, ssOrderNumber: result.orderNumber }
-                : so,
-            ),
-            auditLog: [
-              ...(d.auditLog || []),
-              {
-                id: uid(),
-                ts: nowIso(),
-                type: "shipstation-push",
-                entity: o.orderNum,
-                description: `Pushed ${o.orderNum} to ShipStation (ID: ${result.shipstationOrderId})`,
-              },
-            ],
-          }));
-        } else {
-          setSsStatus(`ShipStation push failed: ${result.error || "Unknown error"}`);
-        }
-      } catch (err) {
-        setSsStatus(`ShipStation push failed: ${err.message}`);
-      }
-      setSsPushing(false);
-      setTimeout(() => setSsStatus(""), 6000);
+      await doPushToShipStation(advancedOrder);
     }
+  };
+
+  // Push an order to ShipStation and record the outcome. Failures show the
+  // full reason (server passes ShipStation's message through) and land in the
+  // audit log; the "Push" button on unpushed picked/booked cards retries this.
+  const doPushToShipStation = async (order) => {
+    setSsPushing(true);
+    setSsStatus("");
+    try {
+      const result = await pushOrder(order, data.products, data.customers);
+      if (result.success) {
+        setSsStatus(`Pushed ${order.orderNum} to ShipStation`);
+        // Store ShipStation order ID on the order
+        setData((d) => ({
+          ...d,
+          salesOrders: d.salesOrders.map((so) =>
+            so.id === order.id
+              ? { ...so, shipstationOrderId: result.shipstationOrderId, ssOrderNumber: result.orderNumber }
+              : so,
+          ),
+          auditLog: [
+            ...(d.auditLog || []),
+            {
+              id: uid(),
+              ts: nowIso(),
+              type: "shipstation-push",
+              entity: order.orderNum,
+              description: `Pushed ${order.orderNum} to ShipStation (ID: ${result.shipstationOrderId})`,
+            },
+          ],
+        }));
+      } else {
+        const why = `${result.error || "Unknown error"}${result.detail ? ` -- ${result.detail}` : ""}`;
+        setSsStatus(`ShipStation push failed: ${why}`);
+        setData((d) => ({
+          ...d,
+          auditLog: [
+            ...(d.auditLog || []),
+            {
+              id: uid(),
+              ts: nowIso(),
+              type: "shipstation-push",
+              entity: order.orderNum,
+              description: `FAILED to push ${order.orderNum} to ShipStation: ${why}`,
+            },
+          ],
+        }));
+      }
+    } catch (err) {
+      setSsStatus(`ShipStation push failed: ${err.message}`);
+    }
+    setSsPushing(false);
+    setTimeout(() => setSsStatus(""), 15000);
   };
 
   // Sync shipments from ShipStation -- checks booked orders for tracking updates
@@ -752,6 +773,32 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                         >
                           SS #{o.shipstationOrderId} -- Awaiting shipment
                         </div>
+                      )}
+
+                      {/* Not-in-ShipStation warning + manual retry -- a failed
+                          auto-push otherwise leaves the order stranded */}
+                      {(stage === "picked" || stage === "booked") && !o.shipstationOrderId && (
+                        <button
+                          onClick={() => doPushToShipStation(o)}
+                          disabled={ssPushing}
+                          title="This order is NOT in ShipStation yet -- push it now"
+                          style={{
+                            width: "100%",
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            marginBottom: 6,
+                            border: "1px solid #FECACA",
+                            background: "#FEF2F2",
+                            color: "#DC2626",
+                            fontWeight: 700,
+                            fontSize: 10,
+                            cursor: ssPushing ? "default" : "pointer",
+                            fontFamily: "inherit",
+                            opacity: ssPushing ? 0.6 : 1,
+                          }}
+                        >
+                          {ssPushing ? "Pushing..." : "Not in ShipStation -- Push now"}
+                        </button>
                       )}
 
                       {/* Callout on Confirmed cards to verify quantities at pick */}
