@@ -231,11 +231,14 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     setShipModal(false);
     // Fire-and-forget shipped notifications -- never block or fail the ship
     // flow. confirmShip bypasses runStageAutomation, so the teammate "shipped"
-    // notification is sent here (exactly once per transition).
-    try {
-      sendShippedEmail({ ...order, shipment: shipForm }, data.customers);
-    } catch (_e) {
-      /* ignore */
+    // notification is sent here (exactly once per transition). Customer
+    // emails are gated behind the Settings toggle (off by default).
+    if (data.customerShippedEmails) {
+      try {
+        sendShippedEmail({ ...order, shipment: shipForm }, data.customers);
+      } catch (_e) {
+        /* ignore */
+      }
     }
     try {
       sendStageNotifications(
