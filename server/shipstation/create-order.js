@@ -101,6 +101,32 @@ export default async function handler(req, res) {
     const shipAddr = parseAddress(shipSource, order.customer);
     const billAddr = parseAddress(billSource, order.customer);
 
+    // Fail fast with a fixable message instead of letting ShipStation reject
+    // an empty ship-to. The address comes from the customer record (or the
+    // imported PO), so tell the user exactly where to fix it.
+    if (!shipAddr.street1 || !shipAddr.postalCode) {
+      return res.status(400).json({
+        error: `No usable ship-to address for "${order.customer}" -- add a full address (street, city, state, ZIP) on the customer record (Customers tab), then push again.`,
+        detail: `Address on file: "${shipSource || "(empty)"}"`,
+      });
+    }
+
+    // Only push units actually picked/filled -- backordered lines (0 filled)
+    // don't belong on the ShipStation packing slip.
+    const items = (order.lines || [])
+      .map((l) => ({
+        sku: l.sku || "",
+        name: l.productName || l.sku || "",
+        quantity: l.qtyFilled != null ? l.qtyFilled : l.qty,
+        unitPrice: l.price || 0,
+      }))
+      .filter((i) => i.quantity > 0);
+    if (items.length === 0) {
+      return res.status(400).json({
+        error: `${order.orderNum} has no filled units -- every line is backordered (0 picked), so there is nothing to ship. Adjust quantities and push again.`,
+      });
+    }
+
     // Build ShipStation order payload.
     // orderKey is our stable internal id: without it, ShipStation's
     // /orders/createorder CREATES A NEW ORDER on every call -- with it,
@@ -136,12 +162,7 @@ export default async function handler(req, res) {
         country: "US",
         phone: order.customerPhone || "",
       },
-      items: (order.lines || []).map((l) => ({
-        sku: l.sku || "",
-        name: l.productName || l.sku || "",
-        quantity: l.qtyFilled != null ? l.qtyFilled : l.qty,
-        unitPrice: l.price || 0,
-      })),
+      items,
       customerNotes: order.notes || "",
       internalNotes: `Internal order: ${order.orderNum} | Type: ${order.type || "dealer"}`,
     };
@@ -156,10 +177,20 @@ export default async function handler(req, res) {
     });
 
     if (!response.ok) {
+      // Extract ShipStation's human-readable message (their errors come back
+      // as JSON with Message/ExceptionMessage) so the UI can show WHY.
       const errText = await response.text();
+      let detail = errText;
+      try {
+        const body = JSON.parse(errText);
+        detail = body.ExceptionMessage || body.Message || body.message || errText;
+      } catch (_) {
+        /* non-JSON error body */
+      }
+      console.error(`ShipStation create-order failed for ${order.orderNum}: HTTP ${response.status} -- ${errText}`);
       return res.status(response.status).json({
-        error: `ShipStation API error: ${response.status}`,
-        detail: errText,
+        error: `ShipStation rejected ${order.orderNum} (HTTP ${response.status})`,
+        detail: String(detail).slice(0, 500),
       });
     }
 
