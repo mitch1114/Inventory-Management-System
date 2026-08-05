@@ -5,6 +5,7 @@ import { STAGES, STAGE_LABEL } from "../lib/constants";
 import { uid, nowIso, fmtDate } from "../lib/utils";
 import { connectQbo, fetchInvoices, isQboConnected, getQboTokens, clearQboTokens } from "../lib/qbo";
 import { sendTestStageEmail } from "../lib/notify";
+import HistoryImport from "./HistoryImport";
 import { BP, BS, BD, BG } from "./ui";
 
 export default function Settings({ data, setData }) {
@@ -1160,6 +1161,9 @@ export default function Settings({ data, setData }) {
           </button>
         </div>
       </div>
+
+      {/* Historical data import (customer list + YOY sales sheet) */}
+      <HistoryImport data={data} setData={setData} />
 
       {/* Team Notifications */}
       <div

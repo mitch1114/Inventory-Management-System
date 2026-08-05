@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { STAGES, STAGE_LABEL, LOCKING } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
+import { historyRevenue } from "../lib/historyImport";
 import { fmt, fmtNum, fmtDate, toCSV, dlCSV } from "../lib/utils";
 import { Badge, Table, TR, TD, SS, BS } from "./ui";
 
@@ -71,6 +72,7 @@ const TIMEFRAMES = [
   { id: "lastQuarter", label: "Last Quarter" },
   { id: "last6Months", label: "Last 6 Months" },
   { id: "ytd", label: "YTD" },
+  { id: "allTime", label: "All Time (incl. history)" },
 ];
 
 const localDateStr = (d) =>
@@ -86,6 +88,10 @@ function timeframeRange(id) {
   let start;
   let end;
   switch (id) {
+    case "allTime":
+      start = new Date(2000, 0, 1);
+      end = now;
+      break;
     case "lastMonth":
       start = new Date(y, m - 1, 1);
       end = new Date(y, m, 0);
@@ -117,6 +123,7 @@ function timeframeRange(id) {
 
 export default function Reports({ data }) {
   const { products, salesOrders, customers } = data;
+  const historicalSales = data.historicalSales || [];
   const [custSel, setCustSel] = useState("all");
   const [timeframe, setTimeframe] = useState("thisMonth");
   const cp = useMemo(
@@ -207,6 +214,47 @@ export default function Reports({ data }) {
       .sort((a, b) => b.rev - a.rev)
       .slice(0, 6);
   }, [shipped, products]);
+  // --- Imported sales history aggregates -----------------------------------------
+  const histTotals = useMemo(() => {
+    let po = 0;
+    let invoiced = 0;
+    let poWithInvoice = 0;
+    let rev = 0;
+    historicalSales.forEach((h) => {
+      po += h.poAmount || 0;
+      rev += historyRevenue(h);
+      if (h.invoiceAmount != null) {
+        invoiced += h.invoiceAmount;
+        poWithInvoice += h.poAmount || 0;
+      }
+    });
+    return {
+      orders: historicalSales.length,
+      revenue: rev,
+      fillRate: poWithInvoice > 0 ? invoiced / poWithInvoice : null,
+    };
+  }, [historicalSales]);
+
+  // Combined revenue by year: live shipped orders + imported history
+  const byYear = useMemo(() => {
+    const m = {};
+    shipped.forEach((o) => {
+      const y = (o.date || "").slice(0, 4);
+      if (!y) return;
+      m[y] = m[y] || { year: y, live: 0, history: 0 };
+      m[y].live += o.lines.reduce((s, l) => s + filledQty(l) * l.price, 0);
+    });
+    historicalSales.forEach((h) => {
+      const y = (h.date || "").slice(0, 4);
+      if (!y) return;
+      m[y] = m[y] || { year: y, live: 0, history: 0 };
+      m[y].history += historyRevenue(h);
+    });
+    return Object.values(m)
+      .sort((a, b) => a.year.localeCompare(b.year))
+      .map((r) => ({ ...r, live: +r.live.toFixed(2), history: +r.history.toFixed(2) }));
+  }, [shipped, historicalSales]);
+
   const stockPie = [
     { name: "Available", value: cp.filter((p) => p.available > p.reorderPoint).length },
     {
@@ -222,12 +270,17 @@ export default function Reports({ data }) {
     salesOrders.forEach((o) => {
       if (o.customer) names.add(o.customer);
     });
+    historicalSales.forEach((h) => {
+      if (h.customer) names.add(h.customer);
+    });
     return [...names].sort((a, b) => a.localeCompare(b));
-  }, [customers, salesOrders]);
+  }, [customers, salesOrders, historicalSales]);
 
+  // Customer report rows: live orders + imported history in one list.
+  // kind: "live" rows carry the order; "hist" rows carry the history entry.
   const custRows = useMemo(() => {
     const [start, end] = timeframeRange(timeframe);
-    return salesOrders
+    const live = salesOrders
       .filter(
         (o) =>
           o.fulfillmentStage !== "cancelled" &&
@@ -236,24 +289,44 @@ export default function Reports({ data }) {
           (custSel === "all" || o.customer === custSel),
       )
       .map((o) => ({
+        kind: "live",
+        id: o.id,
+        date: o.date,
         order: o,
         units: o.lines.reduce((s, l) => s + l.qty, 0),
         value: o.lines.reduce((s, l) => s + l.qty * l.price, 0),
-      }))
-      .sort((a, b) => (a.order.date < b.order.date ? 1 : -1));
-  }, [salesOrders, custSel, timeframe]);
+      }));
+    const hist = historicalSales
+      .filter(
+        (h) =>
+          (h.date || "") >= start &&
+          (h.date || "") <= end &&
+          (custSel === "all" || h.customer === custSel),
+      )
+      .map((h) => ({
+        kind: "hist",
+        id: h.id,
+        date: h.date || "",
+        hist: h,
+        units: null,
+        value: historyRevenue(h),
+      }));
+    return [...live, ...hist].sort((a, b) => (a.date < b.date ? 1 : -1));
+  }, [salesOrders, historicalSales, custSel, timeframe]);
 
-  const custTotals = useMemo(
-    () => ({
-      units: custRows.reduce((s, r) => s + r.units, 0),
+  const custTotals = useMemo(() => {
+    const liveRows = custRows.filter((r) => r.kind === "live");
+    return {
+      units: liveRows.reduce((s, r) => s + r.units, 0),
       value: custRows.reduce((s, r) => s + r.value, 0),
-      shippedRev: custRows
-        .filter((r) => r.order.fulfillmentStage === "shipped")
-        .reduce(
-          (s, r) => s + r.order.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0),
-          0,
-        ),
-      backUnits: custRows
+      shippedRev:
+        liveRows
+          .filter((r) => r.order.fulfillmentStage === "shipped")
+          .reduce(
+            (s, r) => s + r.order.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0),
+            0,
+          ) + custRows.filter((r) => r.kind === "hist").reduce((s, r) => s + r.value, 0),
+      backUnits: liveRows
         .filter((r) => LOCKING.has(r.order.fulfillmentStage))
         .reduce(
           (s, r) =>
@@ -264,20 +337,30 @@ export default function Reports({ data }) {
             ),
           0,
         ),
-    }),
-    [custRows],
-  );
+    };
+  }, [custRows]);
 
   const exportCustCSV = () => {
     const headers = ["Order #", "Customer", "Date", "Stage", "Units", "Value"];
-    const rows = custRows.map(({ order: o, units, value }) => ({
-      "Order #": o.orderNum,
-      Customer: o.customer,
-      Date: o.date,
-      Stage: STAGE_LABEL[o.fulfillmentStage] || o.fulfillmentStage,
-      Units: units,
-      Value: value.toFixed(2),
-    }));
+    const rows = custRows.map((r) =>
+      r.kind === "live"
+        ? {
+            "Order #": r.order.orderNum,
+            Customer: r.order.customer,
+            Date: r.order.date,
+            Stage: STAGE_LABEL[r.order.fulfillmentStage] || r.order.fulfillmentStage,
+            Units: r.units,
+            Value: r.value.toFixed(2),
+          }
+        : {
+            "Order #": r.hist.invoiceNum || r.hist.poRef || "history",
+            Customer: r.hist.customer,
+            Date: r.hist.date || "",
+            Stage: "Historical",
+            Units: "",
+            Value: r.value.toFixed(2),
+          },
+    );
     const tfLabel = TIMEFRAMES.find((t) => t.id === timeframe);
     const fn = `customer-report-${custSel === "all" ? "all" : custSel.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-${tfLabel ? tfLabel.id : timeframe}.csv`;
     dlCSV(toCSV(rows, headers), fn);
@@ -368,6 +451,50 @@ export default function Reports({ data }) {
           )}
         </CC>
       </div>
+      {/* Imported sales history: all-time revenue by year + summary metrics */}
+      {historicalSales.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 14, marginBottom: 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <MetricCard
+              value={fmt(histTotals.revenue)}
+              label="Historical Revenue"
+              sub="imported sales sheet"
+              accent="#64748B"
+            />
+            <MetricCard
+              value={fmtNum(histTotals.orders)}
+              label="Historical Orders"
+              accent="#64748B"
+            />
+            <MetricCard
+              value={histTotals.fillRate != null ? (histTotals.fillRate * 100).toFixed(1) + "%" : "--"}
+              label="Historical Fill Rate"
+              sub="invoiced vs PO amount"
+              accent="#06B6D4"
+            />
+          </div>
+          <CC title="Revenue by Year — live system + imported history">
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={byYear}>
+                <XAxis dataKey="year" tick={{ fill: "#94A3B8", fontSize: 11 }} />
+                <YAxis tick={{ fill: "#94A3B8", fontSize: 10 }} />
+                <Tooltip
+                  contentStyle={{
+                    background: "#FFFFFF",
+                    border: "1px solid #CBD5E1",
+                    borderRadius: 8,
+                    color: "#0F172A",
+                  }}
+                  formatter={(v, name) => [fmt(v), name === "history" ? "Imported history" : "Live system"]}
+                />
+                <Bar dataKey="history" stackId="rev" fill="#94A3B8" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="live" stackId="rev" fill="#7C3AED" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CC>
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <CC title="Available Stock Health">
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -554,23 +681,38 @@ export default function Reports({ data }) {
           headers={["Order #", "Customer", "Date", "Stage", "Units", "Value"]}
           empty={custRows.length === 0 ? "No orders in this timeframe." : null}
         >
-          {custRows.map(({ order: o, units, value }, i) => (
-            <TR key={o.id} i={i}>
-              <TD mono>{o.orderNum}</TD>
-              <TD>{o.customer}</TD>
-              <TD>{fmtDate(o.date)}</TD>
-              <TD>
-                <Badge
-                  status={o.fulfillmentStage}
-                  label={STAGE_LABEL[o.fulfillmentStage] || o.fulfillmentStage}
-                />
-              </TD>
-              <TD>{fmtNum(units)}</TD>
-              <TD accent="#0F172A" s={{ fontWeight: 600 }}>
-                {fmt(value)}
-              </TD>
-            </TR>
-          ))}
+          {custRows.map((r, i) =>
+            r.kind === "live" ? (
+              <TR key={r.id} i={i}>
+                <TD mono>{r.order.orderNum}</TD>
+                <TD>{r.order.customer}</TD>
+                <TD>{fmtDate(r.order.date)}</TD>
+                <TD>
+                  <Badge
+                    status={r.order.fulfillmentStage}
+                    label={STAGE_LABEL[r.order.fulfillmentStage] || r.order.fulfillmentStage}
+                  />
+                </TD>
+                <TD>{fmtNum(r.units)}</TD>
+                <TD accent="#0F172A" s={{ fontWeight: 600 }}>
+                  {fmt(r.value)}
+                </TD>
+              </TR>
+            ) : (
+              <TR key={r.id} i={i}>
+                <TD mono>{r.hist.invoiceNum || r.hist.poRef || "--"}</TD>
+                <TD>{r.hist.customer}</TD>
+                <TD>{r.date ? fmtDate(r.date) : "--"}</TD>
+                <TD>
+                  <Badge status="historical" label="Historical" />
+                </TD>
+                <TD>--</TD>
+                <TD accent="#0F172A" s={{ fontWeight: 600 }}>
+                  {fmt(r.value)}
+                </TD>
+              </TR>
+            ),
+          )}
           {custRows.length > 0 && (
             <tr style={{ background: "#F8FAFC", borderTop: "2px solid #E2E8F0" }}>
               <TD accent="#0F172A" s={{ fontWeight: 700 }}>
