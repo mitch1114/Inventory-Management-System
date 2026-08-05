@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import { uid, fmt, fmtNum, nowIso, fmtDate, fmtTs, toCSV, dlCSV, parseCSV } from "../lib/utils";
 import { STAGE_LABEL } from "../lib/constants";
+import { customerHistoryStats, historyRevenue, normalizeName } from "../lib/historyImport";
 import { isQboConnected, fetchInvoices } from "../lib/qbo";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BAq } from "./ui";
 
@@ -32,6 +33,7 @@ const blank = () => ({
   email: "",
   phone: "",
   address: "",
+  billToAddress: "",
   notes: "",
   contacts: blankContacts(),
 });
@@ -62,7 +64,8 @@ export default function Customers({ data, setData }) {
   const qboConnected = isQboConnected();
   const viewing = viewingId ? data.customers.find((c) => c.id === viewingId) : null;
 
-  // Per-customer order count and lifetime value
+  // Per-customer order count and lifetime value -- live orders plus imported
+  // sales history (matched by normalized name).
   const stats = useMemo(() => {
     const map = {};
     data.salesOrders.forEach((o) => {
@@ -74,8 +77,22 @@ export default function Customers({ data, setData }) {
         0,
       );
     });
+    const histByNorm = {};
+    (data.historicalSales || []).forEach((h) => {
+      const k = normalizeName(h.customer);
+      if (!histByNorm[k]) histByNorm[k] = { orders: 0, value: 0 };
+      histByNorm[k].orders += 1;
+      histByNorm[k].value += historyRevenue(h);
+    });
+    data.customers.forEach((c) => {
+      const hist = histByNorm[normalizeName(c.name)];
+      if (!hist) return;
+      if (!map[c.name]) map[c.name] = { orders: 0, value: 0 };
+      map[c.name].orders += hist.orders;
+      map[c.name].value += hist.value;
+    });
     return map;
-  }, [data.salesOrders]);
+  }, [data.salesOrders, data.historicalSales, data.customers]);
 
   // Filtered list
   const filtered = useMemo(() => {
@@ -113,6 +130,12 @@ export default function Customers({ data, setData }) {
       .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [data.salesOrders, viewing]);
 
+  // Imported sales history for the customer being viewed
+  const hist = useMemo(
+    () => (viewing ? customerHistoryStats(data.historicalSales || [], viewing.name) : null),
+    [data.historicalSales, viewing],
+  );
+
   const ytdTotals = useMemo(() => {
     let units = 0;
     let revenue = 0;
@@ -137,6 +160,7 @@ export default function Customers({ data, setData }) {
       email: c.email || "",
       phone: c.phone || "",
       address: c.address || "",
+      billToAddress: c.billToAddress || "",
       notes: c.notes || "",
       contacts: Object.fromEntries(
         CONTACT_ROLES.map((r) => [
@@ -694,11 +718,19 @@ export default function Customers({ data, setData }) {
               />
             </Field>
           </div>
-          <Field label="Address">
+          <Field label="Ship-To Address (used for ShipStation labels)">
             <textarea
               style={{ ...IS, minHeight: 50, resize: "vertical" }}
               value={form.address}
               onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+              placeholder="Street, City, State ZIP"
+            />
+          </Field>
+          <Field label="Bill-To Address (invoicing only -- never used for shipping)">
+            <textarea
+              style={{ ...IS, minHeight: 50, resize: "vertical" }}
+              value={form.billToAddress}
+              onChange={(e) => setForm((f) => ({ ...f, billToAddress: e.target.value }))}
               placeholder="Street, City, State ZIP"
             />
           </Field>
@@ -800,9 +832,15 @@ export default function Customers({ data, setData }) {
               <span style={{ fontSize: 13 }}>{viewing.phone || "--"}</span>
             </div>
             <div style={{ gridColumn: "1 / -1" }}>
-              <div style={SH}>Address</div>
+              <div style={SH}>Ship-To Address (ShipStation)</div>
               <span style={{ fontSize: 13, color: "#64748B" }}>{viewing.address || "--"}</span>
             </div>
+            {viewing.billToAddress && (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={SH}>Bill-To Address (invoicing only)</div>
+                <span style={{ fontSize: 13, color: "#64748B" }}>{viewing.billToAddress}</span>
+              </div>
+            )}
           </div>
 
           {/* Notes */}
@@ -991,6 +1029,73 @@ export default function Customers({ data, setData }) {
               })}
             </Table>
           </div>
+
+          {/* Imported sales history */}
+          {hist && hist.orders > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <div style={SH}>
+                Sales History ({hist.first ? fmtDate(hist.first) : "?"} &ndash;{" "}
+                {hist.last ? fmtDate(hist.last) : "?"})
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 18,
+                  marginBottom: 10,
+                  fontSize: 13,
+                  color: "#374151",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span>
+                  <span style={{ fontWeight: 700 }}>{fmtNum(hist.orders)}</span> order
+                  {hist.orders !== 1 ? "s" : ""}
+                </span>
+                <span style={{ fontFamily: "monospace", fontWeight: 600, color: "#15803D" }}>
+                  {fmt(hist.revenue)} revenue
+                </span>
+                {hist.fillRate != null && (
+                  <span>
+                    <span style={{ fontWeight: 700 }}>{(hist.fillRate * 100).toFixed(1)}%</span>{" "}
+                    historical fill rate (invoiced vs PO)
+                  </span>
+                )}
+              </div>
+              <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid #E2E8F0", borderRadius: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: "#F8FAFC", position: "sticky", top: 0 }}>
+                      {["Date", "PO#", "Invoice#", "PO Amt", "Invoiced", "Fill"].map((h) => (
+                        <th key={h} style={{ padding: "7px 10px", textAlign: h === "Date" || h === "PO#" || h === "Invoice#" ? "left" : "right", fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...hist.rows]
+                      .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+                      .map((h, i) => (
+                        <tr key={h.id || i} style={{ borderTop: "1px solid #F1F5F9", background: i % 2 === 0 ? "transparent" : "#FAFAFA" }}>
+                          <td style={{ padding: "6px 10px" }}>{h.date ? fmtDate(h.date) : "--"}</td>
+                          <td style={{ padding: "6px 10px", fontFamily: "monospace", color: "#6D28D9" }}>{h.poRef || "--"}</td>
+                          <td style={{ padding: "6px 10px", fontFamily: "monospace", color: "#64748B" }}>{h.invoiceNum || "--"}</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "monospace" }}>{fmt(h.poAmount)}</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "monospace", color: "#15803D" }}>
+                            {h.invoiceAmount != null ? fmt(h.invoiceAmount) : "--"}
+                          </td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: "#64748B" }}>
+                            {h.invoiceAmount != null && h.poAmount > 0
+                              ? `${Math.round((h.invoiceAmount / h.poAmount) * 100)}%`
+                              : "--"}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
             <button

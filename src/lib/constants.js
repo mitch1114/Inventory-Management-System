@@ -55,6 +55,7 @@ export const SC = {
   "cycle-count":   { bg: "#F0F9FF", text: "#0369A1", dot: "#0EA5E9", border: "#BAE6FD" },
   mispick:         { bg: "#FEF2F2", text: "#B91C1C", dot: "#DC2626", border: "#FECACA" },
   notify:          { bg: "#FAF5FF", text: "#6D28D9", dot: "#7C3AED", border: "#DDD6FE" },
+  historical:      { bg: "#F1F5F9", text: "#475569", dot: "#64748B", border: "#CBD5E1" },
   hold:            { bg: "#FEFCE8", text: "#854D0E", dot: "#CA8A04", border: "#FDE68A" },
 };
 
