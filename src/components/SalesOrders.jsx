@@ -68,6 +68,23 @@ function buildQboInvoiceCSV(orders, prodMap) {
         (qty * (l.price || 0)).toFixed(2),
       ]);
     });
+    // Freight billed through: shipping cost pulled from ShipStation (or
+    // entered at ship time) becomes its own invoice line.
+    const shipCost = o.shipment && o.shipment.shippingCost;
+    if (shipCost > 0) {
+      rows.push([
+        o.orderNum,
+        o.customer,
+        mdY(invDate),
+        plusDays(invDate, 30),
+        "Net 30",
+        "Shipping",
+        "Freight / shipping charges",
+        1,
+        shipCost.toFixed(2),
+        shipCost.toFixed(2),
+      ]);
+    }
   });
   if (rows.length === 0) return null;
   return [header.join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n");
@@ -82,6 +99,18 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     carrier: "",
     trackingNum: "",
     shipDate: todayIso(),
+    shippingCost: "",
+  });
+
+  // Ship form -> shipment object: shippingCost input is a string; store a
+  // number only when the field was filled in.
+  const normShipForm = (f) => ({
+    carrier: f.carrier,
+    trackingNum: f.trackingNum,
+    shipDate: f.shipDate,
+    ...(f.shippingCost !== "" && f.shippingCost != null
+      ? { shippingCost: +f.shippingCost || 0 }
+      : {}),
   });
 
   const prodMap = useMemo(
@@ -233,6 +262,10 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
         carrier: (order.shipment && order.shipment.carrier) || "",
         trackingNum: (order.shipment && order.shipment.trackingNum) || "",
         shipDate: todayIso(),
+        shippingCost:
+          order.shipment && order.shipment.shippingCost != null
+            ? String(order.shipment.shippingCost)
+            : "",
       });
       setBoPolicy("kill");
       setShipModal(true);
@@ -243,7 +276,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
 
   const confirmShip = () => {
     // Resolve any outstanding backorders (fill & kill or split) before shipping
-    setData((d) => advanceStage(resolveBackorders(d, order.id, boPolicy), order.id, "shipped", shipForm));
+    setData((d) => advanceStage(resolveBackorders(d, order.id, boPolicy), order.id, "shipped", normShipForm(shipForm)));
     setShipModal(false);
     // Fire-and-forget shipped notifications -- never block or fail the ship
     // flow. confirmShip bypasses runStageAutomation, so the teammate "shipped"
@@ -251,14 +284,14 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     // emails are gated behind the Settings toggle (off by default).
     if (data.customerShippedEmails) {
       try {
-        sendShippedEmail({ ...order, shipment: shipForm }, data.customers);
+        sendShippedEmail({ ...order, shipment: normShipForm(shipForm) }, data.customers);
       } catch (_e) {
         /* ignore */
       }
     }
     try {
       sendStageNotifications(
-        { ...order, fulfillmentStage: "shipped", shipment: shipForm },
+        { ...order, fulfillmentStage: "shipped", shipment: normShipForm(shipForm) },
         "shipped",
         data.notificationRules,
       ).then((r) => {
@@ -570,6 +603,11 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
             <strong>Shipment:</strong> {order.shipment.carrier}
             {order.shipment.trackingNum ? ` -- ${order.shipment.trackingNum}` : ""}
             {order.shipment.shipDate ? ` -- ${fmtDate(order.shipment.shipDate)}` : ""}
+            {order.shipment.shippingCost != null && (
+              <span style={{ fontWeight: 700 }}>
+                {" "}-- Shipping cost: {fmt(order.shipment.shippingCost)}
+              </span>
+            )}
           </div>
         )}
 
@@ -890,16 +928,31 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
               />
             </Field>
           </div>
-          <Field label="Tracking Number">
-            <input
-              style={IS}
-              value={shipForm.trackingNum}
-              onChange={(e) =>
-                setShipForm((f) => ({ ...f, trackingNum: e.target.value }))
-              }
-              placeholder="Optional"
-            />
-          </Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+            <Field label="Tracking Number">
+              <input
+                style={IS}
+                value={shipForm.trackingNum}
+                onChange={(e) =>
+                  setShipForm((f) => ({ ...f, trackingNum: e.target.value }))
+                }
+                placeholder="Optional"
+              />
+            </Field>
+            <Field label="Shipping Cost ($)">
+              <input
+                style={IS}
+                type="number"
+                step="0.01"
+                min="0"
+                value={shipForm.shippingCost}
+                onChange={(e) =>
+                  setShipForm((f) => ({ ...f, shippingCost: e.target.value }))
+                }
+                placeholder="Auto-filled from ShipStation if blank"
+              />
+            </Field>
+          </div>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
             <button style={BS} onClick={() => setShipModal(false)}>
               Cancel
@@ -1032,11 +1085,15 @@ export default function SalesOrders({ data, setData }) {
         Lines: o.lines.length,
         Units: units,
         Value: value,
+        ShippingFee:
+          o.shipment && o.shipment.shippingCost != null
+            ? o.shipment.shippingCost.toFixed(2)
+            : "",
         Notes: o.notes || "",
       };
     });
     const csv = toCSV(rows, [
-      "OrderNum", "Customer", "Date", "Stage", "Type", "DealerPO", "Lines", "Units", "Value", "Notes",
+      "OrderNum", "Customer", "Date", "Stage", "Type", "DealerPO", "Lines", "Units", "Value", "ShippingFee", "Notes",
     ]);
     dlCSV(csv, "sales-orders.csv");
   };

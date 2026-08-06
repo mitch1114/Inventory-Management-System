@@ -31,7 +31,7 @@ export default async function handler(req, res) {
 
     // Query ShipStation for each order (batch to avoid rate limits)
     for (const orderNum of orderNumbers.slice(0, 20)) {
-      const url = `${SS_BASE}/shipments?orderNumber=${encodeURIComponent(orderNum)}&pageSize=10`;
+      const url = `${SS_BASE}/shipments?orderNumber=${encodeURIComponent(orderNum)}&pageSize=50`;
       const response = await fetch(url, {
         headers: { Authorization: `Basic ${auth}` },
       });
@@ -39,17 +39,28 @@ export default async function handler(req, res) {
       if (!response.ok) continue;
       const data = await response.json();
 
-      if (data.shipments && data.shipments.length > 0) {
-        // Take the most recent shipment
-        const s = data.shipments[0];
+      // Orders often ship in multiple boxes -- aggregate every non-voided
+      // shipment: sum label costs, join tracking numbers, use latest ship date.
+      const active = (data.shipments || []).filter((s) => !s.voided);
+      if (active.length > 0) {
+        const latest = active.reduce((a, b) =>
+          String(a.shipDate || "") >= String(b.shipDate || "") ? a : b,
+        );
+        const cost = active.reduce(
+          (sum, s) => sum + (Number(s.shipmentCost) || 0) + (Number(s.insuranceCost) || 0),
+          0,
+        );
+        const tracking = [...new Set(active.map((s) => s.trackingNumber).filter(Boolean))];
         shipments.push({
           orderNumber: orderNum,
-          carrier: s.carrierCode || s.serviceCode || "",
-          trackingNum: s.trackingNumber || "",
-          shipDate: s.shipDate ? s.shipDate.slice(0, 10) : "",
-          delivered: s.deliveryDate ? true : false,
-          deliveryDate: s.deliveryDate ? s.deliveryDate.slice(0, 10) : "",
-          shipstationShipmentId: s.shipmentId,
+          carrier: latest.carrierCode || latest.serviceCode || "",
+          trackingNum: tracking.join(","),
+          shipDate: latest.shipDate ? latest.shipDate.slice(0, 10) : "",
+          delivered: latest.deliveryDate ? true : false,
+          deliveryDate: latest.deliveryDate ? latest.deliveryDate.slice(0, 10) : "",
+          shipstationShipmentId: latest.shipmentId,
+          shippingCost: Math.round(cost * 100) / 100,
+          shipmentCount: active.length,
         });
       }
     }
