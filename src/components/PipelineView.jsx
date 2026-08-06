@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { Html5Qrcode } from "html5-qrcode";
-import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING } from "../lib/constants";
+import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS } from "../lib/constants";
 import { computeInventory, advanceStage, resolveBackorders } from "../lib/inventory";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
@@ -52,7 +52,7 @@ export default function PipelineView({ data, setData }) {
   const [editOrder, setEditOrder] = useState(null); // order being edited (add lines / change qtys)
   const [showInventory, setShowInventory] = useState(false); // live-inventory table collapsed by default
   const [boPolicy, setBoPolicy] = useState("kill"); // what to do with backorders at ship time
-  const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso() });
+  const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso(), shippingCost: "" });
   const [pickQtys, setPickQtys] = useState([]); // [{productId, qtyFilled}] for pick confirmation
   const [ssPushing, setSsPushing] = useState(false); // ShipStation push in progress
   const [ssSyncing, setSsSyncing] = useState(false); // ShipStation sync in progress
@@ -182,6 +182,14 @@ export default function PipelineView({ data, setData }) {
     }
   }, [skuToProdId, prodMap, advModal]);
 
+  // Display label for the order's sales channel (Dealer / Distributor / ...)
+  const orderChannelLabel = (o) => {
+    const c = CHANNELS.find((ch) => ch.value === o.channel);
+    if (c) return c.label;
+    if (o.type === "distributor") return "Distributor";
+    return "Dealer";
+  };
+
   // Print a clean pick sheet for an order in a new window (no app chrome).
   const printPickSheet = (o) => {
     const esc = (s) =>
@@ -196,16 +204,23 @@ export default function PipelineView({ data, setData }) {
           <td class="mono">${esc(p ? p.sku : "?")}</td>
           <td>${esc(p ? p.name : "--")}</td>
           <td class="mono">${esc(p && p.upc ? p.upc : "")}</td>
+          <td class="price">$${esc((l.price || 0).toFixed(2))}</td>
           <td class="qty">${qty}</td>
           <td class="line"></td>
         </tr>`;
       })
       .join("");
     const totalUnits = o.lines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0);
+    const totalValue = o.lines.reduce(
+      (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty) * (l.price || 0),
+      0,
+    );
+    const chan = orderChannelLabel(o);
     const html = `<!DOCTYPE html><html><head><title>Pick Sheet ${esc(o.orderNum)}</title>
 <style>
   body { font-family: Arial, Helvetica, sans-serif; margin: 32px; color: #111; }
-  h1 { font-size: 22px; margin: 0 0 2px; } .sub { color: #555; font-size: 13px; margin-bottom: 14px; }
+  h1 { font-size: 22px; margin: 0 0 2px; } .sub { color: #555; font-size: 13px; margin-bottom: 10px; }
+  .chan { display: inline-block; border: 2px solid #111; padding: 4px 14px; font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 14px; }
   .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; font-size: 13px; margin-bottom: 14px; }
   .meta b { display: inline-block; min-width: 110px; }
   .note { border: 1px solid #ccc; background: #f7f7f7; padding: 8px 10px; font-size: 13px; margin-bottom: 14px; }
@@ -214,6 +229,7 @@ export default function PipelineView({ data, setData }) {
   th { background: #eee; font-size: 11px; text-transform: uppercase; }
   .chk { width: 28px; text-align: center; font-size: 16px; }
   .mono { font-family: monospace; }
+  .price { width: 70px; text-align: right; font-family: monospace; }
   .qty { width: 60px; text-align: center; font-weight: bold; font-size: 15px; }
   .line { width: 90px; }
   .totals { margin-top: 10px; font-size: 14px; font-weight: bold; }
@@ -222,6 +238,7 @@ export default function PipelineView({ data, setData }) {
 </style></head><body>
 <h1>PICK SHEET &mdash; ${esc(o.orderNum)}</h1>
 <div class="sub">ACC Crappie Stix &middot; printed ${new Date().toLocaleString()}</div>
+<div class="chan">${esc(chan)} ORDER${o.type === "preorder" ? " &middot; PRE-ORDER" : ""}${o.showOrder ? " &middot; SHOW PRICING" : ""}</div>
 <div class="meta">
   <div><b>Customer:</b> ${esc(o.customer)}</div>
   <div><b>PO Ref:</b> ${esc(o.dealerPORef || "--")}</div>
@@ -230,9 +247,9 @@ export default function PipelineView({ data, setData }) {
 </div>
 ${o.specialInstructions ? `<div class="note"><b>Special Instructions:</b> ${esc(o.specialInstructions)}</div>` : ""}
 ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
-<table><thead><tr><th></th><th>SKU</th><th>Product</th><th>UPC</th><th>Qty</th><th>Picked</th></tr></thead>
+<table><thead><tr><th></th><th>SKU</th><th>Product</th><th>UPC</th><th>Unit Price</th><th>Qty</th><th>Picked</th></tr></thead>
 <tbody>${rows}</tbody></table>
-<div class="totals">Total: ${o.lines.length} lines &middot; ${totalUnits} units</div>
+<div class="totals">Total: ${o.lines.length} lines &middot; ${totalUnits} units &middot; $${esc(totalValue.toFixed(2))}</div>
 <div class="sig"><span>Picked by</span><span>Checked by</span><span>Date</span></div>
 <script>window.onload = function(){ window.print(); };</script>
 </body></html>`;
@@ -250,6 +267,8 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       carrier: (o.shipment && o.shipment.carrier) || "",
       trackingNum: (o.shipment && o.shipment.trackingNum) || "",
       shipDate: todayIso(),
+      shippingCost:
+        o.shipment && o.shipment.shippingCost != null ? String(o.shipment.shippingCost) : "",
     });
     // Pre-fill pick quantities with current qtyFilled values
     setPickQtys(
@@ -265,6 +284,17 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     setBoPolicy("kill");
   };
 
+  // Ship form -> shipment object: shippingCost input is a string; store a
+  // number only when the field was filled in.
+  const normShipForm = (f) => ({
+    carrier: f.carrier,
+    trackingNum: f.trackingNum,
+    shipDate: f.shipDate,
+    ...(f.shippingCost !== "" && f.shippingCost != null
+      ? { shippingCost: +f.shippingCost || 0 }
+      : {}),
+  });
+
   const doAdvance = async () => {
     const o = advModal;
     const next = STAGE_NEXT[o.fulfillmentStage];
@@ -275,7 +305,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     setData((d) => {
       // Resolve any outstanding backorders before shipping (fill & kill or split)
       const base = next === "shipped" ? resolveBackorders(d, o.id, boPolicy) : d;
-      let result = advanceStage(base, o.id, next, next === "shipped" ? shipForm : null, adjusted);
+      let result = advanceStage(base, o.id, next, next === "shipped" ? normShipForm(shipForm) : null, adjusted);
       // Log mispicks if any occurred during picking
       if (next === "picked" && mispicks.length > 0) {
         result = {
@@ -300,7 +330,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     // default); teammate stage notifications below are unaffected.
     if (next === "shipped" && data.customerShippedEmails) {
       try {
-        sendShippedEmail({ ...o, shipment: shipForm }, data.customers);
+        sendShippedEmail({ ...o, shipment: normShipForm(shipForm) }, data.customers);
       } catch (_) {}
     }
 
@@ -323,7 +353,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     // Outcome is audit-logged so email failures aren't silent.
     try {
       sendStageNotifications(
-        next === "shipped" ? { ...advancedOrder, shipment: shipForm } : advancedOrder,
+        next === "shipped" ? { ...advancedOrder, shipment: normShipForm(shipForm) } : advancedOrder,
         next,
         data.notificationRules,
       ).then((r) => {
@@ -457,10 +487,22 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
     }));
   };
 
-  // Sync shipments from ShipStation -- checks booked orders for tracking updates
+  // Sync shipments from ShipStation -- advances booked orders that shipped
+  // (with tracking + label cost) and backfills shipping cost on recently
+  // shipped orders that are missing it (the bookkeeper needs the freight
+  // amount when entering booked/shipped orders into QuickBooks).
   const doSyncShipments = useCallback(async () => {
     const bookedOrders = data.salesOrders.filter((o) => o.fulfillmentStage === "booked");
-    if (bookedOrders.length === 0) {
+    const costCutoff = new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const backfillOrders = data.salesOrders.filter(
+      (o) =>
+        o.fulfillmentStage === "shipped" &&
+        (o.shipstationOrderId || o.ssOrderNumber) &&
+        (!o.shipment || o.shipment.shippingCost == null) &&
+        ((o.shipment && o.shipment.shipDate) || o.date || "") >= costCutoff,
+    );
+    const targets = [...bookedOrders, ...backfillOrders];
+    if (targets.length === 0) {
       setSsStatus("No booked orders to sync");
       setTimeout(() => setSsStatus(""), 3000);
       return;
@@ -471,10 +513,10 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       // ShipStation order numbers are the dealer PO ref when available -- prefer
       // the number stored at push time, then the PO ref, then our order number.
       const ssNumFor = (o) => o.ssOrderNumber || o.dealerPORef || o.orderNum;
-      const orderNums = bookedOrders.map(ssNumFor);
+      const orderNums = targets.map(ssNumFor);
       const result = await syncShipments(orderNums);
       if (result.success && result.shipments && result.shipments.length > 0) {
-        // Auto-advance shipped orders and apply tracking info
+        // Auto-advance shipped orders and apply tracking + shipping cost
         setData((d) => {
           let updated = { ...d };
           const logs = [];
@@ -482,22 +524,51 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
             const order = updated.salesOrders.find(
               (o) =>
                 (o.ssOrderNumber || o.dealerPORef || o.orderNum) === s.orderNumber &&
-                o.fulfillmentStage === "booked",
+                (o.fulfillmentStage === "booked" || o.fulfillmentStage === "shipped"),
             );
             if (!order) continue;
             const shipInfo = {
               carrier: s.carrier || "",
               trackingNum: s.trackingNum || "",
               shipDate: s.shipDate || todayIso(),
+              ...(s.shippingCost != null ? { shippingCost: s.shippingCost } : {}),
             };
-            updated = advanceStage(updated, order.id, "shipped", shipInfo);
-            logs.push({
-              id: uid(),
-              ts: nowIso(),
-              type: "shipstation-sync",
-              entity: order.orderNum,
-              description: `Auto-shipped ${order.orderNum} from ShipStation -- ${s.carrier} ${s.trackingNum}`,
-            });
+            if (order.fulfillmentStage === "booked") {
+              updated = advanceStage(updated, order.id, "shipped", shipInfo);
+              logs.push({
+                id: uid(),
+                ts: nowIso(),
+                type: "shipstation-sync",
+                entity: order.orderNum,
+                description: `Auto-shipped ${order.orderNum} from ShipStation -- ${s.carrier} ${s.trackingNum}${s.shippingCost != null ? ` -- shipping ${fmt(s.shippingCost)}` : ""}`,
+              });
+            } else if (s.shippingCost != null && (!order.shipment || order.shipment.shippingCost == null)) {
+              // Already shipped -- just fill in the missing shipping cost
+              updated = {
+                ...updated,
+                salesOrders: updated.salesOrders.map((o) =>
+                  o.id === order.id
+                    ? {
+                        ...o,
+                        shipment: {
+                          ...(o.shipment || {}),
+                          carrier: (o.shipment && o.shipment.carrier) || shipInfo.carrier,
+                          trackingNum: (o.shipment && o.shipment.trackingNum) || shipInfo.trackingNum,
+                          shipDate: (o.shipment && o.shipment.shipDate) || shipInfo.shipDate,
+                          shippingCost: s.shippingCost,
+                        },
+                      }
+                    : o,
+                ),
+              };
+              logs.push({
+                id: uid(),
+                ts: nowIso(),
+                type: "shipstation-sync",
+                entity: order.orderNum,
+                description: `Pulled shipping cost ${fmt(s.shippingCost)} for ${order.orderNum} from ShipStation (${s.shipmentCount || 1} shipment${(s.shipmentCount || 1) !== 1 ? "s" : ""})`,
+              });
+            }
           }
           return {
             ...updated,
@@ -553,7 +624,14 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
   const autoSyncRef = useRef(() => {});
   useEffect(() => {
     autoSyncRef.current = () => {
-      if (!data.salesOrders.some((o) => o.fulfillmentStage === "booked")) return;
+      const hasWork = data.salesOrders.some(
+        (o) =>
+          o.fulfillmentStage === "booked" ||
+          (o.fulfillmentStage === "shipped" &&
+            (o.shipstationOrderId || o.ssOrderNumber) &&
+            (!o.shipment || o.shipment.shippingCost == null)),
+      );
+      if (!hasWork) return;
       try {
         Promise.resolve(doSyncShipments()).catch(() => {});
       } catch (_) {}
@@ -783,6 +861,11 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                       {o.shipment && o.shipment.carrier && (
                         <div style={{ fontSize: 11, color: "#64748B", marginBottom: 5 }}>
                           {o.shipment.carrier} {o.shipment.trackingNum}
+                          {o.shipment.shippingCost != null && (
+                            <span style={{ color: "#15803D", fontWeight: 700 }}>
+                              {" "}&middot; ship {fmt(o.shipment.shippingCost)}
+                            </span>
+                          )}
                         </div>
                       )}
 
@@ -1573,14 +1656,27 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                   />
                 </Field>
               </div>
-              <Field label="Tracking Number">
-                <input
-                  style={IS}
-                  value={shipForm.trackingNum}
-                  onChange={(e) => setShipForm((f) => ({ ...f, trackingNum: e.target.value }))}
-                  placeholder="Optional"
-                />
-              </Field>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+                <Field label="Tracking Number">
+                  <input
+                    style={IS}
+                    value={shipForm.trackingNum}
+                    onChange={(e) => setShipForm((f) => ({ ...f, trackingNum: e.target.value }))}
+                    placeholder="Optional"
+                  />
+                </Field>
+                <Field label="Shipping Cost ($)">
+                  <input
+                    style={IS}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={shipForm.shippingCost}
+                    onChange={(e) => setShipForm((f) => ({ ...f, shippingCost: e.target.value }))}
+                    placeholder="Auto-filled from ShipStation if blank"
+                  />
+                </Field>
+              </div>
             </div>
           )}
 
