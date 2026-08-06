@@ -4,6 +4,8 @@ import { LOCKING, COL_ALIASES, CHANNELS } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow } from "../lib/utils";
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
+import { parseSpsOrder } from "../lib/parseSpsPdf";
+import { buildScanIndex, matchScan } from "../lib/scan";
 import { sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import { Modal, Field, Badge, IS, SS, BP, BS, BG } from "./ui";
 
@@ -309,8 +311,93 @@ export default function DealerPOImport({ data, setData, onClose }) {
         }
       };
       reader.readAsArrayBuffer(file);
+    } else if (ext === "pdf") {
+      // SPS Commerce EDI order PDF (Scheels, MidwayUSA, ...). Lines are
+      // matched to products by UPC/GTIN first -- the one field every SPS
+      // partner layout carries -- with SKU text as fallback.
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          // pdf.js loads lazily so the PDF engine stays out of the main bundle
+          const pdfjs = await import("pdfjs-dist");
+          const workerUrl = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
+          pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+          const doc = await pdfjs.getDocument({ data: e.target.result }).promise;
+          const pages = [];
+          for (let i = 1; i <= doc.numPages; i++) {
+            const tc = await (await doc.getPage(i)).getTextContent();
+            pages.push(tc.items.map((it) => ({ x: it.transform[4], y: it.transform[5], str: it.str })));
+          }
+          const meta = parseSpsOrder(pages);
+          if (!meta || meta.lines.length === 0) {
+            setError(
+              "Couldn't read this PDF as an SPS Commerce order. Expected the SPS \"Order\" layout with UPC/GTIN line items.",
+            );
+            return;
+          }
+
+          const scanIdx = buildScanIndex(data.products);
+          const matched = meta.lines.map((l) => {
+            const pidByUpc = l.upc ? matchScan(scanIdx, l.upc) : null;
+            const prod = pidByUpc
+              ? data.products.find((p) => p.id === pidByUpc)
+              : findProduct(l.sku);
+            const cp = prod ? computedProds.find((c) => c.id === prod.id) : null;
+            return {
+              sku: l.sku || l.buyerSku || l.upc,
+              qty: l.qty,
+              cost: l.price,
+              msrp: 0,
+              desc: l.desc || (prod ? prod.name : ""),
+              productId: prod ? prod.id : "",
+              productName: prod ? prod.name : "",
+              available: cp ? cp.available : 0,
+              sellPrice: prod ? prod.sellPrice : l.price,
+              matched: !!prod,
+            };
+          });
+
+          setParsedMeta({
+            fileType: "dealer",
+            poNumber: meta.poNumber,
+            buyerName: meta.buyerName,
+            buyerEmail: meta.buyerEmail,
+            shipToAddr: meta.shipToAddr,
+          });
+          setChannel("dealer");
+          setRequestedShipDate(meta.requestedShipDate || "");
+          setSpecialInstructions(
+            [
+              meta.poType ? `SPS PO Type: ${meta.poType}` : "",
+              meta.cancelDate ? `Cancel date: ${fmtDate(meta.cancelDate)}` : "",
+            ]
+              .filter(Boolean)
+              .join(" | "),
+          );
+          setDealerInfo({
+            customer: meta.customer || "",
+            poRef: meta.poNumber || "",
+            date: meta.orderDate || todayIso(),
+            notes: [
+              "SPS Commerce EDI order",
+              meta.buyerName ? `Buyer: ${meta.buyerName}` : "",
+              meta.buyerEmail || "",
+              meta.shipToAddr ? `Ship To: ${meta.shipToAddr}` : "",
+            ]
+              .filter(Boolean)
+              .join(" | "),
+          });
+          setLines(matched);
+          setImportMode("sps");
+          setAutoMapped(true);
+          setStep("review");
+        } catch (err) {
+          setError("Failed to parse PDF: " + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
     } else {
-      setError("Unsupported file type. Please upload a .csv or .xlsx file.");
+      setError("Unsupported file type. Please upload a .csv, .xlsx, or SPS Commerce .pdf file.");
     }
   };
 
@@ -546,12 +633,12 @@ export default function DealerPOImport({ data, setData, onClose }) {
               Drop a file here or click to browse
             </div>
             <div style={{ fontSize: 12, color: "#64748B" }}>
-              Supports: ACC Order Writer (.xlsx), generic CSV, or Excel spreadsheet
+              Supports: ACC Order Writer (.xlsx), SPS Commerce EDI order (.pdf), generic CSV / Excel
             </div>
             <input
               ref={fileRef}
               type="file"
-              accept=".csv,.xlsx,.xls"
+              accept=".csv,.xlsx,.xls,.pdf"
               style={{ display: "none" }}
               onChange={(e) => {
                 const f = e.target.files[0];
@@ -576,6 +663,11 @@ export default function DealerPOImport({ data, setData, onClose }) {
               <li>
                 <strong>ACC Order Writer</strong> -- auto-detected. Reads customer info, PO#,
                 buyer details, and all product lines with pricing.
+              </li>
+              <li>
+                <strong>SPS Commerce EDI order (.pdf)</strong> -- auto-detected (Scheels,
+                MidwayUSA...). Reads PO#, dates, ship-to store, and matches every line by
+                UPC/GTIN.
               </li>
               <li>
                 <strong>CSV / Excel</strong> -- map columns for SKU and Quantity. Price and
