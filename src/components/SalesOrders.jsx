@@ -6,6 +6,7 @@ import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../li
 import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo";
 import { pushOrder } from "../lib/shipstation";
 import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
+import { billableFreight, freightThreshold } from "../lib/freight";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
 import OrderEditModal from "./OrderEditModal";
@@ -68,10 +69,11 @@ function buildQboInvoiceCSV(orders, prodMap) {
         (qty * (l.price || 0)).toFixed(2),
       ]);
     });
-    // Freight billed through: shipping cost pulled from ShipStation (or
-    // entered at ship time) becomes its own invoice line.
-    const shipCost = o.shipment && o.shipment.shippingCost;
-    if (shipCost > 0) {
+    // Freight billed through ONLY when the billing rules say the customer
+    // pays (dealers under $1,000 merchandise, distributors under $4,000).
+    // Over the threshold ACC absorbs the cost and no invoice line is emitted.
+    const billable = billableFreight(o);
+    if (billable > 0) {
       rows.push([
         o.orderNum,
         o.customer,
@@ -81,8 +83,8 @@ function buildQboInvoiceCSV(orders, prodMap) {
         "Shipping",
         "Freight / shipping charges",
         1,
-        shipCost.toFixed(2),
-        shipCost.toFixed(2),
+        billable.toFixed(2),
+        billable.toFixed(2),
       ]);
     }
   });
@@ -606,6 +608,14 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
             {order.shipment.shippingCost != null && (
               <span style={{ fontWeight: 700 }}>
                 {" "}-- Shipping cost: {fmt(order.shipment.shippingCost)}
+                {order.shipment.shippingCost > 0 && (
+                  <span style={{ fontWeight: 600 }}>
+                    {billableFreight(order) > 0
+                      ? " (BILLED to customer -- under "
+                      : " (ACC pays -- order over "}
+                    {fmt(freightThreshold(order))})
+                  </span>
+                )}
               </span>
             )}
           </div>
@@ -1089,11 +1099,12 @@ export default function SalesOrders({ data, setData }) {
           o.shipment && o.shipment.shippingCost != null
             ? o.shipment.shippingCost.toFixed(2)
             : "",
+        FreightBilled: billableFreight(o) > 0 ? billableFreight(o).toFixed(2) : "",
         Notes: o.notes || "",
       };
     });
     const csv = toCSV(rows, [
-      "OrderNum", "Customer", "Date", "Stage", "Type", "DealerPO", "Lines", "Units", "Value", "ShippingFee", "Notes",
+      "OrderNum", "Customer", "Date", "Stage", "Type", "DealerPO", "Lines", "Units", "Value", "ShippingFee", "FreightBilled", "Notes",
     ]);
     dlCSV(csv, "sales-orders.csv");
   };

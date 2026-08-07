@@ -49,8 +49,10 @@ export default async function handler(req, res) {
       <p style="margin:0 0 6px;"><strong>Customer:</strong> ${esc(customer || "--")}</p>
       ${valueLine}
       ${note ? `<p style="margin:0 0 6px;"><strong>Note:</strong> ${esc(note)}</p>` : ""}
-      <p style="margin:16px 0 0;">
-        View it in the inventory system.<br />
+      <p style="margin:20px 0 0;">
+        <a href="https://ops.acccrappiestix.com" style="display:inline-block;background:#6D28D9;color:#FFFFFF;text-decoration:none;font-weight:bold;font-size:14px;padding:11px 26px;border-radius:8px;">Open in ACC Ops</a>
+      </p>
+      <p style="margin:14px 0 0;color:#64748B;font-size:12px;">
         -- The ACC Crappie Stix Team
       </p>
     </div>
