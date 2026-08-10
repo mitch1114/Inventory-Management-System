@@ -33,7 +33,12 @@ export default async function handler(req, res) {
     //   "Pitman Creek Wholesale | ATN RECEIVING | 213 Tech Way | Stanford KY, 40484"
     const parseAddress = (str, customerName) => {
       const out = { company: "", street1: "", street2: "", street3: "", city: "", state: "", postalCode: "" };
-      const segs = String(str || "").split(/[|,]/).map((s) => s.trim()).filter(Boolean);
+      // Strip trailing country tokens ("... MO 65279 US") -- SPS/EDI addresses
+      // append them and they break the ZIP detection below.
+      const segs = String(str || "")
+        .split(/[|,]/)
+        .map((s) => s.trim().replace(/\s+(US|USA|United States)$/i, ""))
+        .filter(Boolean);
       if (segs.length === 0) return out;
 
       // Find the zip working backwards; capture "City ST 12345", "ST 12345",
