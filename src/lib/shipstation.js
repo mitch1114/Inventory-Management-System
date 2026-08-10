@@ -34,8 +34,17 @@ export async function pushOrder(order, products, customers) {
       (c) => c.name.toLowerCase().trim() === String(order.customer || "").toLowerCase().trim(),
     );
 
+    // Last-resort ship-to: older imports wrote the PO's ship-to into the
+    // order notes ("... | Ship To: <addr>") instead of shipToAddr. Recover it
+    // so those orders still push without manual address entry.
+    const notesShipTo =
+      !order.shipToAddr && !order.address && !(cust && cust.address)
+        ? (String(order.notes || "").match(/Ship To:\s*(.+)$/s) || [])[1] || ""
+        : "";
+
     const enrichedOrder = {
       ...order,
+      shipToAddr: order.shipToAddr || notesShipTo,
       address: order.address || (cust ? cust.address : ""),
       // Imported customer records can hold multiple ";"-separated emails --
       // ShipStation only accepts one.
