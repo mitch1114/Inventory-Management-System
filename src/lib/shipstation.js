@@ -37,7 +37,9 @@ export async function pushOrder(order, products, customers) {
     const enrichedOrder = {
       ...order,
       address: order.address || (cust ? cust.address : ""),
-      customerEmail: cust ? cust.email : "",
+      // Imported customer records can hold multiple ";"-separated emails --
+      // ShipStation only accepts one.
+      customerEmail: cust && cust.email ? cust.email.split(";")[0].trim() : "",
       customerPhone: cust ? cust.phone : "",
       lines: order.lines.map((l) => {
         const prod = prodMap[l.productId];

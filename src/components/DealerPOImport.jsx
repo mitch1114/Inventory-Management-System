@@ -471,6 +471,9 @@ export default function DealerPOImport({ data, setData, onClose }) {
       dealerPORef: dealerInfo.poRef || "",
       requestedShipDate: requestedShipDate || "",
       specialInstructions: specialInstructions || "",
+      // Ship-to parsed from the PO itself (ACC order writer / SPS PDF) --
+      // the ShipStation push prefers this over the customer record.
+      shipToAddr: (parsedMeta && parsedMeta.shipToAddr) || "",
       lines: orderLines,
       shipment: {},
       notes: dealerInfo.notes || "",
@@ -508,6 +511,20 @@ export default function DealerPOImport({ data, setData, onClose }) {
           type: "adjustment",
           entity: customerName,
           description: `Auto-added customer "${customerName}" (${newCust.type}) from PO import`,
+        });
+      } else if (existing && !existing.address && parsedMeta && parsedMeta.shipToAddr) {
+        // Existing customer with no ship-to on file: fill it from the PO so
+        // future ShipStation pushes work without manual entry (blank only --
+        // never overwrites an address someone entered).
+        customers = customers.map((c) =>
+          c.id === existing.id ? { ...c, address: parsedMeta.shipToAddr } : c,
+        );
+        newCustLogs.push({
+          id: uid(),
+          ts: nowIso(),
+          type: "adjustment",
+          entity: customerName,
+          description: `Filled blank ship-to address for "${customerName}" from PO ${dealerInfo.poRef || ""}`,
         });
       }
 
