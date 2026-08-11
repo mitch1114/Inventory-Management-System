@@ -6,6 +6,7 @@ import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, de
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
 import { parseSpsOrder } from "../lib/parseSpsPdf";
 import { buildScanIndex, matchScan } from "../lib/scan";
+import { matchCustomer } from "../lib/historyImport";
 import { sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import { Modal, Field, Badge, IS, SS, BP, BS, BG } from "./ui";
 
@@ -460,10 +461,19 @@ export default function DealerPOImport({ data, setData, onClose }) {
     const totalBO = orderLines.reduce((s, l) => s + l.qtyBackordered, 0);
     const totalCost = validLines.reduce((s, l) => s + l.qty * (l.cost || 0), 0);
 
+    // Canonicalize to an existing customer record (fuzzy name match) so the
+    // order carries the record's exact name -- name variants ("Fish USA" vs
+    // "FishUSA") would otherwise miss the customer's ship-to address at push
+    // time and spawn duplicate customer records.
+    const matchedCust = matchCustomer(dealerInfo.customer, data.customers || []);
+    const canonicalCustomer = matchedCust
+      ? matchedCust.name
+      : (dealerInfo.customer || "Unknown Dealer").trim();
+
     const order = {
       id: uid(),
       orderNum,
-      customer: dealerInfo.customer || "Unknown Dealer",
+      customer: canonicalCustomer,
       date: dealerInfo.date || todayIso(),
       fulfillmentStage: "confirmed",
       type: isPreorder ? "preorder" : "standard",
@@ -483,14 +493,12 @@ export default function DealerPOImport({ data, setData, onClose }) {
     const kindLabel = isPreorder ? " as PRE-ORDER" : "";
     const showLabel = showOrder ? " * SHOW ORDER pricing" : "";
     const desc = parsedMeta
-      ? `Imported PO ${dealerInfo.poRef || "?"} from ${dealerInfo.customer}${kindLabel} -- ${validLines.length} lines * ${fmtNum(totalUnits)} units * ${fmt(totalCost)} ${parsedMeta.fileType} cost${parsedMeta.buyerName ? " * Buyer: " + parsedMeta.buyerName : ""}${showLabel}`
-      : `Imported ${dealerInfo.poRef || "dealer PO"} from ${dealerInfo.customer}${kindLabel} -- ${fmtNum(totalUnits)} units${showLabel}`;
+      ? `Imported PO ${dealerInfo.poRef || "?"} from ${canonicalCustomer}${kindLabel} -- ${validLines.length} lines * ${fmtNum(totalUnits)} units * ${fmt(totalCost)} ${parsedMeta.fileType} cost${parsedMeta.buyerName ? " * Buyer: " + parsedMeta.buyerName : ""}${showLabel}`
+      : `Imported ${dealerInfo.poRef || "dealer PO"} from ${canonicalCustomer}${kindLabel} -- ${fmtNum(totalUnits)} units${showLabel}`;
 
     setData((d) => {
-      const customerName = (dealerInfo.customer || "Unknown Dealer").trim();
-      const existing = (d.customers || []).find(
-        (c) => c.name.toLowerCase().trim() === customerName.toLowerCase(),
-      );
+      const customerName = canonicalCustomer;
+      const existing = matchCustomer(customerName, d.customers || []);
 
       // Auto-create customer if not in the database
       let customers = d.customers || [];
