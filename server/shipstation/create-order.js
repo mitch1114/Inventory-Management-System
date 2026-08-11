@@ -34,10 +34,20 @@ export default async function handler(req, res) {
     const parseAddress = (str, customerName) => {
       const out = { company: "", street1: "", street2: "", street3: "", city: "", state: "", postalCode: "" };
       // Strip trailing country tokens ("... MO 65279 US") -- SPS/EDI addresses
-      // append them and they break the ZIP detection below.
+      // append them and they break the ZIP detection below. Also split a
+      // glued state+ZIP ("PA16415" -> "PA 16415"); street numbers are never
+      // exactly 5 digits attached to a letter, so this is safe.
       const segs = String(str || "")
         .split(/[|,]/)
-        .map((s) => s.trim().replace(/\s+(US|USA|United States)$/i, ""))
+        .map((s) =>
+          s
+            .trim()
+            // Only strip US/USA when it follows a ZIP (or stands alone) --
+            // company names like "Fish USA" / "Midway USA" must survive.
+            .replace(/(\d{5}(?:-\d{4})?)\s+(?:US|USA|United States)$/i, "$1")
+            .replace(/^(?:US|USA|United States)$/i, "")
+            .replace(/([A-Za-z])(\d{5}(?:-\d{4})?)$/, "$1 $2"),
+        )
         .filter(Boolean);
       if (segs.length === 0) return out;
 
@@ -76,6 +86,36 @@ export default async function handler(req, res) {
           out.city = citySeg;
         }
       }
+
+      // Segments without commas glue street and city together ("Company 6960
+      // W. Ridge Road Fairview" before "PA 16415"). When the extracted city
+      // contains digits it's really street+city -- split on the LAST
+      // street-suffix word and push the street part back into `rest`.
+      if (out.city && /\d/.test(out.city) && out.city.split(/\s+/).length > 2) {
+        const toks = out.city.split(/\s+/);
+        const SUFFIX = /^(road|rd|street|st|drive|dr|avenue|ave|blvd|boulevard|hwy|highway|lane|ln|way|court|ct|circle|cir|pkwy|parkway|trail|trl|box|suite|ste|apt|unit|place|pl|plaza|loop)\.?$/i;
+        let cut = -1;
+        for (let i = 0; i < toks.length; i++) {
+          if (SUFFIX.test(toks[i])) {
+            cut = i;
+            // absorb trailing unit/route numbers and directionals ("Box 17587",
+            // "Suite 3", "Hwy 9 East") as long as a city token remains after
+            while (
+              cut + 1 < toks.length - 1 &&
+              /^(#?\d+[A-Za-z]?|[NSEW]|North|South|East|West)$/i.test(toks[cut + 1])
+            )
+              cut++;
+          }
+        }
+        if (cut >= 0 && cut < toks.length - 1) {
+          rest.push(toks.slice(0, cut + 1).join(" "));
+          out.city = toks.slice(cut + 1).join(" ");
+        } else if (toks.length > 1) {
+          rest.push(toks.slice(0, -1).join(" "));
+          out.city = toks[toks.length - 1];
+        }
+      }
+
       // Leading company-name segment (matches the customer, or has no digits
       // while a street-looking segment follows) becomes the company field.
       if (
@@ -91,6 +131,19 @@ export default async function handler(req, res) {
       // ATN/ATTN lines belong after the street
       if (/^AT+N/i.test(out.street1) && out.street2) {
         [out.street1, out.street2] = [out.street2, out.street1];
+      }
+      // Company name still embedded at the start of the street line ("Farris
+      // Brothers Inc PO Box 17587"): everything before the first numeric / PO
+      // token is the company. Streets starting with their number ("213 Tech
+      // Way") and label lines ("ATN RECEIVING") are untouched.
+      if (out.street1 && !/^[#\d]/.test(out.street1)) {
+        const toks = out.street1.split(/\s+/);
+        const di = toks.findIndex((t) => /\d/.test(t) || /^p\.?o\.?$/i.test(t) || t.startsWith("#"));
+        if (di > 0) {
+          const head = toks.slice(0, di).join(" ");
+          out.company = out.company ? `${out.company} ${head}` : head;
+          out.street1 = toks.slice(di).join(" ");
+        }
       }
       return out;
     };
