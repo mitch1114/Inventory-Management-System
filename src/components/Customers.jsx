@@ -725,6 +725,25 @@ export default function Customers({ data, setData }) {
               onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
               placeholder="Street, City, State ZIP"
             />
+            {!form.address.trim() && form.billToAddress.trim() && (
+              <button
+                onClick={() => setForm((f) => ({ ...f, address: f.billToAddress }))}
+                style={{
+                  marginTop: 6,
+                  background: "#EFF6FF",
+                  border: "1px solid #BFDBFE",
+                  borderRadius: 6,
+                  padding: "4px 12px",
+                  color: "#1D4ED8",
+                  fontWeight: 600,
+                  fontSize: 11,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                Copy from Bill-To (they receive at the same address)
+              </button>
+            )}
           </Field>
           <Field label="Bill-To Address (invoicing only -- never used for shipping)">
             <textarea

@@ -1,6 +1,7 @@
 // --- ShipStation client-side helpers ------------------------------------------
 // All calls go through our Vercel API routes (/api/shipstation/*) which keep
 // the ShipStation API key/secret in server-side environment variables only.
+import { matchCustomer } from "./historyImport";
 
 const API_BASE = "/api/shipstation";
 
@@ -29,10 +30,15 @@ export async function pushOrder(order, products, customers) {
     const prodMap = {};
     products.forEach((p) => { prodMap[p.id] = p; });
 
-    // Pull recipient contact details from the customer record when available
-    const cust = (customers || []).find(
-      (c) => c.name.toLowerCase().trim() === String(order.customer || "").toLowerCase().trim(),
-    );
+    // Pull recipient contact details from the customer record when available.
+    // Exact name match first, then the same fuzzy matching the history import
+    // uses ("Fish USA" vs "FishUSA", punctuation/suffix variants) -- an order
+    // whose customer name differs slightly from the record must still find
+    // the ship-to address.
+    const cust =
+      (customers || []).find(
+        (c) => c.name.toLowerCase().trim() === String(order.customer || "").toLowerCase().trim(),
+      ) || matchCustomer(order.customer, customers || []);
 
     // Last-resort ship-to: older imports wrote the PO's ship-to into the
     // order notes ("... | Ship To: <addr>") instead of shipToAddr. Recover it
