@@ -2,7 +2,7 @@ import { useState, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { LOCKING, COL_ALIASES, CHANNELS } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
-import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow } from "../lib/utils";
+import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow, nextSoNumber } from "../lib/utils";
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
 import { parseSpsOrder } from "../lib/parseSpsPdf";
 import { buildScanIndex, matchScan } from "../lib/scan";
@@ -437,7 +437,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
       return;
     }
 
-    const num = (data.counters.so || 0) + 1;
+    const num = nextSoNumber(data);
     const orderNum = `SO-${String(num).padStart(4, "0")}`;
 
     const isPreorder = orderKind === "preorder";
