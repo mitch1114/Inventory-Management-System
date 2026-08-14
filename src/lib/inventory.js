@@ -1,5 +1,5 @@
 import { LOCKING, STAGE_LABEL } from "./constants";
-import { uid, nowIso, todayIso } from "./utils";
+import { uid, nowIso, todayIso, nextSoNumber } from "./utils";
 
 // --- Core inventory engine ----------------------------------------------------
 // available = onHand - locked (locked = all units in confirmed/picked/booked orders)
@@ -140,7 +140,7 @@ export function resolveBackorders(data, orderId, policy) {
   // policy "split" -- carve the remainder into a tracked backorder order
   const computed = computeInventory(data.products, data.salesOrders);
   const availMap = Object.fromEntries(computed.map((p) => [p.id, p.available]));
-  const num = ((data.counters && data.counters.so) || 0) + 1;
+  const num = nextSoNumber(data);
   const orderNum = `SO-${String(num).padStart(4, "0")}`;
   const childLines = boLines.map((l) => {
     const avail = availMap[l.productId] || 0;

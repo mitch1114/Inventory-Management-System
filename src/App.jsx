@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { LOCKING } from "./lib/constants";
 import { computeInventory } from "./lib/inventory";
-import { loadData, saveData, subscribeToChanges, onSaveResult } from "./lib/storage";
+import { loadData, saveData, subscribeToChanges, onSaveResult, onConflict, refreshFromRemote } from "./lib/storage";
 import { isSupabaseConfigured } from "./lib/supabase";
 import { isAuthEnabled, getSession, onAuthChange, signOut } from "./lib/auth";
 import Login from "./components/Login";
@@ -89,6 +89,43 @@ export default function App() {
     });
     return () => onSaveResult(null);
   }, []);
+
+  // Stale-write conflict: this tab tried to save over NEWER data from another
+  // user (missed realtime updates, e.g. after laptop sleep). The save was
+  // blocked -- reload the latest data and tell the user to redo their change.
+  useEffect(() => {
+    onConflict(() => {
+      refreshFromRemote().then((fresh) => {
+        if (fresh) setDataRaw(fresh);
+      });
+      setSyncStatus("conflict");
+      setTimeout(() => setSyncStatus("connected"), 10000);
+    });
+    return () => onConflict(null);
+  }, []);
+
+  // Re-fetch the latest data when the tab regains focus -- a laptop that
+  // slept overnight misses realtime events and would otherwise operate on
+  // stale data (duplicate order numbers, overwritten changes).
+  useEffect(() => {
+    if (!isSupabaseConfigured() || !authed) return;
+    const onWake = () => {
+      if (document.visibilityState && document.visibilityState !== "visible") return;
+      refreshFromRemote().then((fresh) => {
+        if (fresh) {
+          setDataRaw(fresh);
+          setSyncStatus("updated");
+          setTimeout(() => setSyncStatus("connected"), 3000);
+        }
+      });
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
+  }, [authed]);
 
   // Subscribe to real-time changes from other users
   useEffect(() => {
@@ -184,15 +221,17 @@ export default function App() {
   const syncLabel =
     syncStatus === "save-error"
       ? "Save failed — not shared!"
-      : syncStatus === "connected"
-        ? "Synced"
-        : syncStatus === "updated"
-          ? "Updated just now"
-          : isSupabaseConfigured()
-            ? "Connecting..."
-            : "Local only";
+      : syncStatus === "conflict"
+        ? "Tab was out of date — reloaded latest. Redo your last change!"
+        : syncStatus === "connected"
+          ? "Synced"
+          : syncStatus === "updated"
+            ? "Updated just now"
+            : isSupabaseConfigured()
+              ? "Connecting..."
+              : "Local only";
   const syncColor =
-    syncStatus === "save-error"
+    syncStatus === "save-error" || syncStatus === "conflict"
       ? "#DC2626"
       : syncStatus === "connected"
         ? "#16A34A"

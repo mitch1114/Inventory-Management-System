@@ -24,6 +24,18 @@ export const fmtTs = (ts) =>
 export const nowIso = () => new Date().toISOString();
 export const todayIso = () => new Date().toISOString().slice(0, 10);
 
+// Next sales-order number: the counter OR the highest SO-#### actually in the
+// data, whichever is greater. A stale counter (tab that missed a sync) can
+// otherwise hand out a number that's already taken.
+export function nextSoNumber(data) {
+  const counter = (data.counters && data.counters.so) || 0;
+  const maxExisting = (data.salesOrders || []).reduce((m, o) => {
+    const match = /^SO-(\d+)$/.exec(o.orderNum || "");
+    return match ? Math.max(m, Number(match[1])) : m;
+  }, 0);
+  return Math.max(counter, maxExisting) + 1;
+}
+
 // --- CSV helpers --------------------------------------------------------------
 const escCSV = (v) => `"${String(v != null ? v : "").replace(/"/g, '""')}"`;
 
