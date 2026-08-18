@@ -57,6 +57,22 @@ function StepTab({ steps, current }) {
   );
 }
 
+// The order writer's comments/special-instructions cell often repeats the
+// ship date ("Ship Date: 8/20/26", "Requested ship date ASAP") -- the order
+// already carries a Requested Ship Date field, so strip it from the
+// instructions text to avoid duplicate/conflicting dates on pick sheets.
+export function stripShipDate(s) {
+  return String(s || "")
+    .replace(
+      /(requested\s+|preferred\s+)?ship\s*date:?\s*(asap|(\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?)|(\d{4}-\d{2}-\d{2})|([a-z]{3,9}\.?\s+\d{1,2}(st|nd|rd|th)?,?\s*\d{0,4}))?/gi,
+      "",
+    )
+    .replace(/\s*[|;]\s*(?=[|;])/g, "")
+    .replace(/^[\s|;,.:-]+|[\s|;,:-]+$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 // --- Wizard steps definition -------------------------------------------------
 const STEPS = [
   { key: "upload", label: "Upload File" },
@@ -231,7 +247,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
             setParsedMeta(meta);
             setChannel(["distributor", "buying-group"].includes(meta.fileType) ? meta.fileType : "dealer");
             setRequestedShipDate(meta.shipDate || "");
-            setSpecialInstructions(meta.comments || "");
+            setSpecialInstructions(stripShipDate(meta.comments));
             setDealerInfo({
               customer: meta.customerName || "",
               poRef: meta.poNumber || "",
