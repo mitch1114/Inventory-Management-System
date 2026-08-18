@@ -66,11 +66,14 @@ const MetricCard = ({ value, label, sub, accent }) => (
 
 // --- Customer report timeframes (all computed in LOCAL time) -------------------
 const TIMEFRAMES = [
+  { id: "today", label: "Today" },
+  { id: "yesterday", label: "Yesterday" },
+  { id: "last7", label: "Last 7 Days" },
+  { id: "last30", label: "Last 30 Days" },
   { id: "thisMonth", label: "This Month" },
   { id: "lastMonth", label: "Last Month" },
   { id: "thisQuarter", label: "This Quarter" },
   { id: "lastQuarter", label: "Last Quarter" },
-  { id: "last6Months", label: "Last 6 Months" },
   { id: "ytd", label: "YTD" },
   { id: "allTime", label: "All Time (incl. history)" },
 ];
@@ -92,6 +95,22 @@ function timeframeRange(id) {
       start = new Date(2000, 0, 1);
       end = now;
       break;
+    case "today":
+      start = now;
+      end = now;
+      break;
+    case "yesterday":
+      start = new Date(y, m, now.getDate() - 1);
+      end = new Date(y, m, now.getDate() - 1);
+      break;
+    case "last7":
+      start = new Date(y, m, now.getDate() - 6);
+      end = now;
+      break;
+    case "last30":
+      start = new Date(y, m, now.getDate() - 29);
+      end = now;
+      break;
     case "lastMonth":
       start = new Date(y, m - 1, 1);
       end = new Date(y, m, 0);
@@ -103,10 +122,6 @@ function timeframeRange(id) {
     case "lastQuarter":
       start = new Date(y, q * 3 - 3, 1);
       end = new Date(y, q * 3, 0);
-      break;
-    case "last6Months":
-      start = new Date(y, m - 5, 1);
-      end = now;
       break;
     case "ytd":
       start = new Date(y, 0, 1);
@@ -126,13 +141,23 @@ export default function Reports({ data }) {
   const historicalSales = data.historicalSales || [];
   const [custSel, setCustSel] = useState("all");
   const [timeframe, setTimeframe] = useState("thisMonth");
+  // Selected reporting period -- scopes the revenue metrics, charts, and the
+  // customer report. Inventory/pipeline cards show CURRENT state (unscoped).
+  const [rangeStart, rangeEnd] = useMemo(() => timeframeRange(timeframe), [timeframe]);
+  const inRange = (o) => (o.date || "") >= rangeStart && (o.date || "") <= rangeEnd;
   const cp = useMemo(
     () => computeInventory(products, salesOrders),
     [products, salesOrders],
   );
   const shipped = useMemo(
-    () => salesOrders.filter((o) => o.fulfillmentStage === "shipped"),
-    [salesOrders],
+    () =>
+      salesOrders.filter(
+        (o) =>
+          o.fulfillmentStage === "shipped" &&
+          (o.date || "") >= rangeStart &&
+          (o.date || "") <= rangeEnd,
+      ),
+    [salesOrders, rangeStart, rangeEnd],
   );
   // Shipped revenue: filled qty x price (partially-filled orders count what shipped)
   const revenue = useMemo(
@@ -143,13 +168,13 @@ export default function Reports({ data }) {
       ),
     [shipped],
   );
-  // Top line: everything ordered (non-cancelled), regardless of fill or stage
+  // Top line: everything ordered (non-cancelled) in the period
   const allRevenue = useMemo(
     () =>
       salesOrders
-        .filter((o) => o.fulfillmentStage !== "cancelled")
+        .filter((o) => o.fulfillmentStage !== "cancelled" && inRange(o))
         .reduce((s, o) => s + o.lines.reduce((ls, l) => ls + l.qty * l.price, 0), 0),
-    [salesOrders],
+    [salesOrders, rangeStart, rangeEnd],
   );
   // COGS: filled qty x OUR true supplier cost (product.costPrice)
   const cogs = useMemo(
@@ -235,15 +260,19 @@ export default function Reports({ data }) {
     };
   }, [historicalSales]);
 
-  // Combined revenue by year: live shipped orders + imported history
+  // Combined revenue by year: live shipped orders + imported history.
+  // Deliberately ALL-TIME (not scoped to the selected period) -- this chart
+  // exists to show the multi-year picture.
   const byYear = useMemo(() => {
     const m = {};
-    shipped.forEach((o) => {
-      const y = (o.date || "").slice(0, 4);
-      if (!y) return;
-      m[y] = m[y] || { year: y, live: 0, history: 0 };
-      m[y].live += o.lines.reduce((s, l) => s + filledQty(l) * l.price, 0);
-    });
+    salesOrders
+      .filter((o) => o.fulfillmentStage === "shipped")
+      .forEach((o) => {
+        const y = (o.date || "").slice(0, 4);
+        if (!y) return;
+        m[y] = m[y] || { year: y, live: 0, history: 0 };
+        m[y].live += o.lines.reduce((s, l) => s + filledQty(l) * l.price, 0);
+      });
     historicalSales.forEach((h) => {
       const y = (h.date || "").slice(0, 4);
       if (!y) return;
@@ -253,7 +282,7 @@ export default function Reports({ data }) {
     return Object.values(m)
       .sort((a, b) => a.year.localeCompare(b.year))
       .map((r) => ({ ...r, live: +r.live.toFixed(2), history: +r.history.toFixed(2) }));
-  }, [shipped, historicalSales]);
+  }, [salesOrders, historicalSales]);
 
   const stockPie = [
     { name: "Available", value: cp.filter((p) => p.available > p.reorderPoint).length },
@@ -368,13 +397,41 @@ export default function Reports({ data }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 18 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: 0 }}>
-          Reports &amp; Analytics
-        </h2>
-        <p style={{ color: "#94A3B8", margin: "4px 0 0", fontSize: 13 }}>
-          Revenue = shipped orders only &middot; Open order value = locked but not yet shipped
-        </p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-end",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 18,
+        }}
+      >
+        <div>
+          <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: 0 }}>
+            Reports &amp; Analytics
+          </h2>
+          <p style={{ color: "#94A3B8", margin: "4px 0 0", fontSize: 13 }}>
+            Revenue metrics &amp; charts reflect the selected period &middot; inventory and open-order
+            cards show current state
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Period
+          </span>
+          <select
+            value={timeframe}
+            onChange={(e) => setTimeframe(e.target.value)}
+            style={{ ...SS, width: 190 }}
+          >
+            {TIMEFRAMES.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <div
         style={{
@@ -611,17 +668,9 @@ export default function Reports({ data }) {
               </option>
             ))}
           </select>
-          <select
-            value={timeframe}
-            onChange={(e) => setTimeframe(e.target.value)}
-            style={{ ...SS, width: 170 }}
-          >
-            {TIMEFRAMES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
-              </option>
-            ))}
-          </select>
+          <span style={{ fontSize: 12, color: "#94A3B8" }}>
+            {(TIMEFRAMES.find((t) => t.id === timeframe) || {}).label} (period set above)
+          </span>
           <div style={{ flex: 1 }} />
           <button style={BS} onClick={exportCustCSV} disabled={custRows.length === 0}>
             Export CSV
