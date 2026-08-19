@@ -7,6 +7,7 @@ import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo
 import { pushOrder } from "../lib/shipstation";
 import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import { billableFreight, freightThreshold } from "../lib/freight";
+import { matchCustomer } from "../lib/historyImport";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
 import OrderEditModal from "./OrderEditModal";
@@ -17,11 +18,22 @@ const channelLabel = (v) => {
   return c ? c.label : v;
 };
 
-// Build a QuickBooks Online invoice-import CSV for the given orders: one row
-// per line item, grouped into invoices by InvoiceNo, using the column names
-// QBO's import mapper recognizes. Dates are M/D/YYYY; DueDate is invoice date
-// + 30 days (Net 30). Returns null when there is nothing to export.
-function buildQboInvoiceCSV(orders, prodMap) {
+// --- QBO invoice PDF -------------------------------------------------------------
+// Opens a print window with one clean invoice page per order (print -> Save as
+// PDF) so the bookkeeper can enter/attach them in QuickBooks. Payment terms
+// come from the customer record (default Net 30) and drive the due date;
+// freight appears ONLY when the billing rules say the customer pays (dealers
+// under $1,000 merchandise, distributors under $4,000).
+const termsDays = (terms) => {
+  const m = /net\s*(\d+)/i.exec(terms || "");
+  if (m) return Number(m[1]);
+  if (/due on receipt|cod/i.test(terms || "")) return 0;
+  return 30;
+};
+
+function printQboInvoices(orders, prodMap, customers) {
+  const esc = (s) =>
+    String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const mdY = (iso) => {
     if (!iso) return "";
     const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
@@ -32,64 +44,107 @@ function buildQboInvoiceCSV(orders, prodMap) {
     const dt = new Date(y, m - 1, d + days);
     return `${dt.getMonth() + 1}/${dt.getDate()}/${dt.getFullYear()}`;
   };
-  const esc = (v) => {
-    const s = String(v == null ? "" : v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const header = [
-    "InvoiceNo",
-    "Customer",
-    "InvoiceDate",
-    "DueDate",
-    "Terms",
-    "Item(Product/Service)",
-    "ItemDescription",
-    "ItemQuantity",
-    "ItemRate",
-    "ItemAmount",
-  ];
-  const rows = [];
-  orders.forEach((o) => {
-    if (o.fulfillmentStage === "cancelled") return;
-    const invDate = (o.shipment && o.shipment.shipDate) || o.date;
-    o.lines.forEach((l) => {
-      const qty = l.qtyFilled != null ? l.qtyFilled : l.qty;
-      if (qty <= 0) return;
-      const prod = prodMap[l.productId];
-      rows.push([
-        o.orderNum,
-        o.customer,
-        mdY(invDate),
-        plusDays(invDate, 30),
-        "Net 30",
-        prod ? prod.sku : "",
-        prod ? prod.name : "",
-        qty,
-        (l.price || 0).toFixed(2),
-        (qty * (l.price || 0)).toFixed(2),
-      ]);
-    });
-    // Freight billed through ONLY when the billing rules say the customer
-    // pays (dealers under $1,000 merchandise, distributors under $4,000).
-    // Over the threshold ACC absorbs the cost and no invoice line is emitted.
-    const billable = billableFreight(o);
-    if (billable > 0) {
-      rows.push([
-        o.orderNum,
-        o.customer,
-        mdY(invDate),
-        plusDays(invDate, 30),
-        "Net 30",
-        "Shipping",
-        "Freight / shipping charges",
-        1,
-        billable.toFixed(2),
-        billable.toFixed(2),
-      ]);
-    }
-  });
-  if (rows.length === 0) return null;
-  return [header.join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n");
+
+  const pages = orders
+    .filter((o) => o.fulfillmentStage !== "cancelled")
+    .map((o) => {
+      const cust = customers.find(
+        (c) => c.name.toLowerCase().trim() === String(o.customer || "").toLowerCase().trim(),
+      ) || matchCustomer(o.customer, customers);
+      const terms = (cust && cust.paymentTerms) || "Net 30";
+      const invDate = (o.shipment && o.shipment.shipDate) || o.date;
+      const rows = o.lines
+        .map((l) => {
+          const qty = l.qtyFilled != null ? l.qtyFilled : l.qty;
+          if (qty <= 0) return "";
+          const prod = prodMap[l.productId];
+          return `<tr>
+            <td class="mono">${esc(prod ? prod.sku : "")}</td>
+            <td>${esc(prod ? prod.name : "--")}</td>
+            <td class="num">${qty}</td>
+            <td class="num">$${(l.price || 0).toFixed(2)}</td>
+            <td class="num">$${(qty * (l.price || 0)).toFixed(2)}</td>
+          </tr>`;
+        })
+        .join("");
+      const merch = o.lines.reduce(
+        (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty) * (l.price || 0),
+        0,
+      );
+      const billable = billableFreight(o);
+      const total = merch + billable;
+      return `<div class="invoice">
+        <div class="head">
+          <div>
+            <div class="co">ACC Crappie Stix</div>
+            <div class="coaddr">3744 Wagon Wheel Road, Suite A<br/>Springdale, AR 72762</div>
+          </div>
+          <div class="inv">
+            <div class="invtitle">INVOICE</div>
+            <table class="meta">
+              <tr><td>Order #</td><td class="mono">${esc(o.orderNum)}</td></tr>
+              <tr><td>Customer PO</td><td class="mono">${esc(o.dealerPORef || "--")}</td></tr>
+              <tr><td>Invoice date</td><td>${esc(mdY(invDate))}</td></tr>
+              <tr><td><strong>Terms</strong></td><td><strong>${esc(terms)}</strong></td></tr>
+              <tr><td>Due date</td><td>${esc(plusDays(invDate, termsDays(terms)))}</td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="parties">
+          <div><div class="lbl">Bill To</div>${esc(o.customer)}${cust && cust.billToAddress ? `<br/>${esc(cust.billToAddress)}` : ""}</div>
+          <div><div class="lbl">Ship To</div>${esc(o.shipToAddr || (cust && cust.address) || "--")}</div>
+        </div>
+        <table class="lines">
+          <thead><tr><th>SKU</th><th>Description</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
+          <tbody>
+            ${rows}
+            ${billable > 0 ? `<tr><td class="mono">Shipping</td><td>Freight / shipping charges</td><td class="num">1</td><td class="num">$${billable.toFixed(2)}</td><td class="num">$${billable.toFixed(2)}</td></tr>` : ""}
+          </tbody>
+        </table>
+        <div class="totals">
+          ${billable > 0 ? `<div>Merchandise: $${merch.toFixed(2)}</div><div>Shipping: $${billable.toFixed(2)}</div>` : ""}
+          <div class="grand">Total: $${total.toFixed(2)}</div>
+        </div>
+        ${
+          o.shipment && o.shipment.shippingCost > 0 && billable === 0
+            ? `<div class="note">Shipping ($${o.shipment.shippingCost.toFixed(2)}) paid by ACC -- order over the freight threshold. Not billed.</div>`
+            : ""
+        }
+      </div>`;
+    })
+    .join("");
+  if (!pages) return false;
+
+  const html = `<!DOCTYPE html><html><head><title>QBO Invoices</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; margin: 36px; color: #111; font-size: 13px; }
+  .invoice { page-break-after: always; }
+  .invoice:last-child { page-break-after: auto; }
+  .head { display: flex; justify-content: space-between; margin-bottom: 22px; }
+  .co { font-size: 20px; font-weight: bold; }
+  .coaddr { color: #444; font-size: 12px; margin-top: 4px; line-height: 1.5; }
+  .invtitle { font-size: 22px; font-weight: bold; letter-spacing: 0.08em; text-align: right; margin-bottom: 8px; }
+  .meta td { padding: 2px 0 2px 18px; font-size: 12px; text-align: right; }
+  .meta td:first-child { color: #555; }
+  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 18px; font-size: 12px; line-height: 1.5; }
+  .lbl { font-size: 10px; font-weight: bold; text-transform: uppercase; color: #666; margin-bottom: 3px; letter-spacing: 0.06em; }
+  .lines { width: 100%; border-collapse: collapse; }
+  .lines th, .lines td { border: 1px solid #999; padding: 6px 8px; text-align: left; }
+  .lines th { background: #eee; font-size: 10px; text-transform: uppercase; }
+  .mono { font-family: monospace; }
+  .num { text-align: right; font-family: monospace; }
+  .totals { margin-top: 12px; text-align: right; font-size: 13px; line-height: 1.7; }
+  .grand { font-size: 16px; font-weight: bold; }
+  .note { margin-top: 10px; font-size: 11px; color: #555; font-style: italic; text-align: right; }
+</style></head><body>${pages}
+<script>window.onload = function(){ window.print(); };</script>
+</body></html>`;
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+  }
+  return true;
 }
 
 // --- OrderDrawer (detail panel) ------------------------------------------------
@@ -759,12 +814,9 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
             </button>
             <button
               style={{ ...BS, padding: "5px 12px", fontSize: 11 }}
-              onClick={() => {
-                const csv = buildQboInvoiceCSV([order], prodMap);
-                if (csv) dlCSV(csv, `${order.orderNum}-qbo-invoice.csv`);
-              }}
+              onClick={() => printQboInvoices([order], prodMap, data.customers || [])}
             >
-              Export for QBO
+              Export for QBO (PDF)
             </button>
           </div>
         </div>
@@ -1056,7 +1108,16 @@ export default function SalesOrders({ data, setData }) {
           o.fulfillmentStage.toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .sort((a, b) => {
+        // Newest order number first (SO-#### descending); non-standard
+        // numbers sort after, by date.
+        const n = (o) => {
+          const m = /^SO-(\d+)$/.exec(o.orderNum || "");
+          return m ? Number(m[1]) : -1;
+        };
+        const diff = n(b) - n(a);
+        return diff !== 0 ? diff : (b.date || "").localeCompare(a.date || "");
+      });
   }, [data.salesOrders, search, stageFilter]);
 
   // Stage counts for filter tabs
@@ -1069,10 +1130,9 @@ export default function SalesOrders({ data, setData }) {
     return c;
   }, [data.salesOrders]);
 
-  // --- CSV export all orders -----------------------------------------------------
-  const exportQboCSV = () => {
-    const csv = buildQboInvoiceCSV(filtered, prodMap);
-    if (csv) dlCSV(csv, "qbo-invoice-import.csv");
+  // --- QBO invoice PDF for the currently filtered orders --------------------------
+  const exportQboPdf = () => {
+    printQboInvoices(filtered, prodMap, data.customers || []);
   };
 
   const exportAllCSV = () => {
@@ -1146,8 +1206,8 @@ export default function SalesOrders({ data, setData }) {
           <button style={{ ...BS, fontSize: 12 }} onClick={exportAllCSV}>
             Export CSV
           </button>
-          <button style={{ ...BS, fontSize: 12 }} onClick={exportQboCSV}>
-            Export for QBO
+          <button style={{ ...BS, fontSize: 12 }} onClick={exportQboPdf}>
+            Export for QBO (PDF)
           </button>
           <button style={BAq} onClick={() => setShowImport(true)}>
             Import New Dealer / Distributor PO

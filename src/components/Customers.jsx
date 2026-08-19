@@ -27,6 +27,8 @@ const blankContact = () => ({ name: "", email: "", phone: "" });
 const blankContacts = () =>
   Object.fromEntries(CONTACT_ROLES.map((r) => [r.key, blankContact()]));
 
+const PAYMENT_TERMS = ["Net 30", "Due on Receipt", "Net 15", "Net 45", "Net 60"];
+
 const blank = () => ({
   name: "",
   type: "dealer",
@@ -34,6 +36,7 @@ const blank = () => ({
   phone: "",
   address: "",
   billToAddress: "",
+  paymentTerms: "Net 30",
   notes: "",
   contacts: blankContacts(),
 });
@@ -161,6 +164,7 @@ export default function Customers({ data, setData }) {
       phone: c.phone || "",
       address: c.address || "",
       billToAddress: c.billToAddress || "",
+      paymentTerms: c.paymentTerms || "Net 30",
       notes: c.notes || "",
       contacts: Object.fromEntries(
         CONTACT_ROLES.map((r) => [
@@ -686,19 +690,34 @@ export default function Customers({ data, setData }) {
               placeholder="Company or person name"
             />
           </Field>
-          <Field label="Type">
-            <select
-              style={SS}
-              value={form.type}
-              onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
-            >
-              {CUSTOMER_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
+            <Field label="Type">
+              <select
+                style={SS}
+                value={form.type}
+                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+              >
+                {CUSTOMER_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Payment Terms (used on QBO invoices)">
+              <select
+                style={SS}
+                value={form.paymentTerms}
+                onChange={(e) => setForm((f) => ({ ...f, paymentTerms: e.target.value }))}
+              >
+                {PAYMENT_TERMS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
             <Field label="Email">
               <input
@@ -849,6 +868,10 @@ export default function Customers({ data, setData }) {
             <div>
               <div style={SH}>Phone</div>
               <span style={{ fontSize: 13 }}>{viewing.phone || "--"}</span>
+            </div>
+            <div>
+              <div style={SH}>Payment Terms</div>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{viewing.paymentTerms || "Net 30"}</span>
             </div>
             <div style={{ gridColumn: "1 / -1" }}>
               <div style={SH}>Ship-To Address (ShipStation)</div>
