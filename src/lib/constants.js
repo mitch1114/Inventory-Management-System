@@ -18,6 +18,11 @@ export const LOCKING = new Set(["confirmed", "picked", "booked"]); // these lock
 
 export const STORAGE_KEY = "acc_crappie_v2";
 
+// Buying-group members (Runnings, Farm & Home, ...) ship to their own store
+// but are ALWAYS billed through the group's remit-to:
+export const MIDSTATES_BILL_TO =
+  "Mid-States Distributing Company\nPO Box 960001\nFt Worth, TX 76161-0001";
+
 // --- Sales channels -------------------------------------------------------
 export const CHANNELS = [
   { value: "dealer", label: "Dealer" },

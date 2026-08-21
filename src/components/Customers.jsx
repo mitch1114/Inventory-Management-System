@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef } from "react";
 import { uid, fmt, fmtNum, nowIso, fmtDate, fmtTs, toCSV, dlCSV, parseCSV } from "../lib/utils";
-import { STAGE_LABEL } from "../lib/constants";
+import { STAGE_LABEL, MIDSTATES_BILL_TO } from "../lib/constants";
 import { customerHistoryStats, historyRevenue, normalizeName } from "../lib/historyImport";
 import { isQboConnected, fetchInvoices } from "../lib/qbo";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BAq } from "./ui";
@@ -200,6 +200,11 @@ export default function Customers({ data, setData }) {
                 type.startsWith("distributor") && x.paymentTerms !== "Net 60"
                   ? "Net 60"
                   : x.paymentTerms,
+              // Buying-group members bill through the group's remit-to
+              billToAddress:
+                type === "buying-group" && !x.billToAddress
+                  ? MIDSTATES_BILL_TO
+                  : x.billToAddress,
             }
           : x,
       ),
@@ -928,16 +933,18 @@ export default function Customers({ data, setData }) {
               <div style={SH}>Payment Terms</div>
               <span style={{ fontSize: 13, fontWeight: 600 }}>{viewing.paymentTerms || "Net 30"}</span>
             </div>
-            <div style={{ gridColumn: "1 / -1" }}>
+            <div>
               <div style={SH}>Ship-To Address (ShipStation)</div>
-              <span style={{ fontSize: 13, color: "#64748B" }}>{viewing.address || "--"}</span>
+              <span style={{ fontSize: 13, color: "#64748B", whiteSpace: "pre-wrap" }}>
+                {viewing.address || "-- not set --"}
+              </span>
             </div>
-            {viewing.billToAddress && (
-              <div style={{ gridColumn: "1 / -1" }}>
-                <div style={SH}>Bill-To Address (invoicing only)</div>
-                <span style={{ fontSize: 13, color: "#64748B" }}>{viewing.billToAddress}</span>
-              </div>
-            )}
+            <div>
+              <div style={SH}>Bill-To Address (invoicing only)</div>
+              <span style={{ fontSize: 13, color: "#64748B", whiteSpace: "pre-wrap" }}>
+                {viewing.billToAddress || "-- not set --"}
+              </span>
+            </div>
           </div>
 
           {/* Notes */}

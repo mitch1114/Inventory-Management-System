@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { testConnection, testConnectionV2, getWarehouses, pullInventory, pushInventory } from "../lib/shipstation";
 import { defaultData, makeDemoData } from "../lib/defaultData";
-import { STAGES, STAGE_LABEL } from "../lib/constants";
+import { STAGES, STAGE_LABEL, MIDSTATES_BILL_TO } from "../lib/constants";
 import { uid, nowIso, fmtDate } from "../lib/utils";
 import { connectQbo, fetchInvoices, isQboConnected, getQboTokens, clearQboTokens } from "../lib/qbo";
 import { sendTestStageEmail } from "../lib/notify";
@@ -92,13 +92,16 @@ export default function Settings({ data, setData }) {
   //   - every distributor gets Net 60 payment terms
   //   - Farm & Home / Farm & Garden stores -> Buying Group
   const runCustomerCleanup = () => {
-    const isBuyingGroupName = (n) => /farm\s*&\s*(home|garden)/i.test(n || "");
+    const isBuyingGroupName = (n) => /farm\s*&\s*(home|garden)|^runnings/i.test(n || "");
     let tiers = 0;
     let terms = 0;
     let groups = 0;
+    let billTos = 0;
     (data.customers || []).forEach((c) => {
       if (c.type === "distributor") tiers++;
+      const willBeGroup = c.type === "buying-group" || isBuyingGroupName(c.name);
       if (isBuyingGroupName(c.name) && c.type !== "buying-group") groups++;
+      if (willBeGroup && !c.billToAddress) billTos++;
       const effType = c.type === "distributor" ? "distributor-t1" : c.type;
       if (
         (effType === "distributor-t1" || effType === "distributor-t2") &&
@@ -106,13 +109,13 @@ export default function Settings({ data, setData }) {
       )
         terms++;
     });
-    if (tiers + terms + groups === 0) {
+    if (tiers + terms + groups + billTos === 0) {
       setCleanupMsg({ ok: true, text: "Nothing to clean up -- all customers already consistent." });
       return;
     }
     if (
       !confirm(
-        `Customer cleanup will:\n- Normalize ${tiers} "distributor" record(s) to Tier 1 Distributor\n- Set Net 60 terms on ${terms} distributor(s)\n- Mark ${groups} Farm & Home / Farm & Garden store(s) as Buying Group\n\nProceed?`,
+        `Customer cleanup will:\n- Normalize ${tiers} "distributor" record(s) to Tier 1 Distributor\n- Set Net 60 terms on ${terms} distributor(s)\n- Mark ${groups} Farm & Home / Farm & Garden / Runnings store(s) as Buying Group\n- Set the Mid-States remit-to as Bill-To on ${billTos} buying-group customer(s) missing one\n\nProceed?`,
       )
     )
       return;
@@ -127,6 +130,9 @@ export default function Settings({ data, setData }) {
           next.paymentTerms !== "Net 60"
         )
           next.paymentTerms = "Net 60";
+        // Buying-group members bill through the group's remit-to (blank only)
+        if (next.type === "buying-group" && !next.billToAddress)
+          next.billToAddress = MIDSTATES_BILL_TO;
         return next;
       }),
       auditLog: [
@@ -136,13 +142,13 @@ export default function Settings({ data, setData }) {
           ts: nowIso(),
           type: "adjustment",
           entity: "Customers",
-          description: `Customer cleanup: ${tiers} normalized to Tier 1 Distributor, ${terms} distributor(s) set to Net 60 terms, ${groups} marked Buying Group`,
+          description: `Customer cleanup: ${tiers} normalized to Tier 1 Distributor, ${terms} distributor(s) set to Net 60 terms, ${groups} marked Buying Group, ${billTos} given the Mid-States bill-to`,
         },
       ],
     }));
     setCleanupMsg({
       ok: true,
-      text: `Cleaned up: ${tiers} normalized to Tier 1 Distributor, ${terms} set to Net 60 terms, ${groups} marked Buying Group.`,
+      text: `Cleaned up: ${tiers} normalized to Tier 1 Distributor, ${terms} set to Net 60 terms, ${groups} marked Buying Group, ${billTos} given the Mid-States bill-to.`,
     });
   };
 
@@ -1262,8 +1268,9 @@ export default function Settings({ data, setData }) {
             </div>
             <div style={{ fontSize: 11, color: "#64748B" }}>
               Normalizes classifications in one pass: bare &quot;distributor&quot; types become
-              Tier 1 Distributor, every distributor gets Net 60 payment terms, and Farm &amp;
-              Home / Farm &amp; Garden stores become Buying Group. Shows counts before applying.
+              Tier 1 Distributor, every distributor gets Net 60 payment terms, Farm &amp; Home /
+              Farm &amp; Garden / Runnings stores become Buying Group, and buying-group customers
+              missing a Bill-To get the Mid-States remit-to. Shows counts before applying.
             </div>
           </div>
           <button style={{ ...BS, fontSize: 12, whiteSpace: "nowrap" }} onClick={runCustomerCleanup}>

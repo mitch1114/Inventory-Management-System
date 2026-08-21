@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS } from "../lib/constants";
+import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS, MIDSTATES_BILL_TO } from "../lib/constants";
 import { computeInventory, advanceStage, resolveBackorders } from "../lib/inventory";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
@@ -34,6 +34,8 @@ const termsDays = (terms) => {
 function printQboInvoices(orders, prodMap, customers) {
   const esc = (s) =>
     String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Multi-line address rendering: stored with newlines or " | " separators
+  const addrHtml = (s) => esc(s).replace(/\n|\s*\|\s*/g, "<br/>");
   const mdY = (iso) => {
     if (!iso) return "";
     const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
@@ -53,6 +55,12 @@ function printQboInvoices(orders, prodMap, customers) {
       ) || matchCustomer(o.customer, customers);
       const terms = (cust && cust.paymentTerms) || "Net 30";
       const invDate = (o.shipment && o.shipment.shipDate) || o.date;
+      // Buying-group members (Runnings, Farm & Home...) bill through the
+      // group's remit-to; everyone else bills to their own record.
+      const isBuyingGroup = (cust && cust.type === "buying-group") || o.channel === "buying-group";
+      const billTo = isBuyingGroup
+        ? (cust && cust.billToAddress) || MIDSTATES_BILL_TO
+        : `${o.customer}${cust && cust.billToAddress ? `\n${cust.billToAddress}` : ""}`;
       const rows = o.lines
         .map((l) => {
           const qty = l.qtyFilled != null ? l.qtyFilled : l.qty;
@@ -91,8 +99,8 @@ function printQboInvoices(orders, prodMap, customers) {
           </div>
         </div>
         <div class="parties">
-          <div><div class="lbl">Bill To</div>${esc(o.customer)}${cust && cust.billToAddress ? `<br/>${esc(cust.billToAddress)}` : ""}</div>
-          <div><div class="lbl">Ship To</div>${esc(o.shipToAddr || (cust && cust.address) || "--")}</div>
+          <div><div class="lbl">Bill To</div>${addrHtml(billTo)}${isBuyingGroup ? `<div class="for">For: ${esc(o.customer)}</div>` : ""}</div>
+          <div><div class="lbl">Ship To</div>${isBuyingGroup ? `${esc(o.customer)}<br/>` : ""}${addrHtml(o.shipToAddr || (cust && cust.address) || "--")}</div>
         </div>
         <table class="lines">
           <thead><tr><th>SKU</th><th>Description</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
@@ -115,7 +123,15 @@ function printQboInvoices(orders, prodMap, customers) {
     .join("");
   if (!pages) return false;
 
-  const html = `<!DOCTYPE html><html><head><title>QBO Invoices</title>
+  // Document title becomes the suggested filename in the browser's
+  // Save-as-PDF dialog: "Customer Name YYYY-MM-DD" for a single order.
+  const active = orders.filter((o) => o.fulfillmentStage !== "cancelled");
+  const docTitle =
+    active.length === 1
+      ? `${String(active[0].customer || "Invoice").replace(/[\\/:*?"<>|]/g, "")} ${((active[0].shipment && active[0].shipment.shipDate) || active[0].date || "").slice(0, 10)}`.trim()
+      : `QBO Invoices ${todayIso()}`;
+
+  const html = `<!DOCTYPE html><html><head><title>${docTitle.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</title>
 <style>
   body { font-family: Arial, Helvetica, sans-serif; margin: 36px; color: #111; font-size: 13px; }
   .invoice { page-break-after: always; }
@@ -136,6 +152,7 @@ function printQboInvoices(orders, prodMap, customers) {
   .totals { margin-top: 12px; text-align: right; font-size: 13px; line-height: 1.7; }
   .grand { font-size: 16px; font-weight: bold; }
   .note { margin-top: 10px; font-size: 11px; color: #555; font-style: italic; text-align: right; }
+  .for { margin-top: 5px; font-size: 11px; color: #555; font-style: italic; }
 </style></head><body>${pages}
 <script>window.onload = function(){ window.print(); };</script>
 </body></html>`;
