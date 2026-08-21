@@ -186,6 +186,36 @@ export default function Customers({ data, setData }) {
       contacts: { ...f.contacts, [role]: { ...f.contacts[role], [field]: value } },
     }));
 
+  // Inline type change from the table -- distributors automatically get the
+  // standard Net 60 terms unless they already have them.
+  const setCustomerType = (c, type) => {
+    setData((d) => ({
+      ...d,
+      customers: d.customers.map((x) =>
+        x.id === c.id
+          ? {
+              ...x,
+              type,
+              paymentTerms:
+                type.startsWith("distributor") && x.paymentTerms !== "Net 60"
+                  ? "Net 60"
+                  : x.paymentTerms,
+            }
+          : x,
+      ),
+      auditLog: [
+        ...(d.auditLog || []),
+        {
+          id: uid(),
+          ts: nowIso(),
+          type: "adjustment",
+          entity: c.name,
+          description: `Changed ${c.name} type to ${TYPE_LABEL[type] || type}${type.startsWith("distributor") ? " (terms set to Net 60)" : ""}`,
+        },
+      ],
+    }));
+  };
+
   // --- Save ------------------------------------------------------------------
   const save = () => {
     if (editing === "new") {
@@ -636,7 +666,32 @@ export default function Customers({ data, setData }) {
                 )}
               </TD>
               <TD>
-                <Badge status={c.type || "dealer"} label={TYPE_LABEL[c.type] || c.type || "Dealer"} />
+                {/* Inline-editable type -- pick a new one to reclassify */}
+                <select
+                  value={c.type || "dealer"}
+                  onChange={(e) => setCustomerType(c, e.target.value)}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid #E2E8F0",
+                    borderRadius: 8,
+                    padding: "4px 6px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "#334155",
+                    fontFamily: "inherit",
+                    cursor: "pointer",
+                    maxWidth: 150,
+                  }}
+                >
+                  {CUSTOMER_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                  {c.type && !CUSTOMER_TYPES.some((t) => t.value === c.type) && (
+                    <option value={c.type}>{c.type}</option>
+                  )}
+                </select>
               </TD>
               <TD>
                 <span style={{ color: "#6D28D9", fontSize: 12 }}>{c.email || "--"}</span>

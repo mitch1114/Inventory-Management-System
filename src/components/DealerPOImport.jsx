@@ -520,10 +520,15 @@ export default function DealerPOImport({ data, setData, onClose }) {
       let customers = d.customers || [];
       const newCustLogs = [];
       if (!existing && customerName && customerName !== "Unknown Dealer") {
+        // Normalize the writer's file type to a valid customer type and apply
+        // the standard terms: distributors are Net 60, everyone else Net 30.
+        const rawType = parsedMeta ? parsedMeta.fileType : "dealer";
+        const custType = rawType === "distributor" ? "distributor-t1" : rawType;
         const newCust = {
           id: uid(),
           name: customerName,
-          type: parsedMeta ? parsedMeta.fileType : "dealer",
+          type: custType,
+          paymentTerms: custType.startsWith("distributor") ? "Net 60" : "Net 30",
           email: parsedMeta && parsedMeta.buyerEmail ? parsedMeta.buyerEmail : "",
           phone: "",
           address: parsedMeta && parsedMeta.shipToAddr ? parsedMeta.shipToAddr : "",
