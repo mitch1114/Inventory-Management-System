@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
-import { LOCKING, COL_ALIASES, CHANNELS } from "../lib/constants";
+import { LOCKING, COL_ALIASES, CHANNELS, MIDSTATES_BILL_TO } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV, parseCSV, detectCol, findHeaderRow, nextSoNumber } from "../lib/utils";
 import { parseAccOrderWriter, detectAccFormat } from "../lib/parseAccOrderWriter";
@@ -532,6 +532,8 @@ export default function DealerPOImport({ data, setData, onClose }) {
           email: parsedMeta && parsedMeta.buyerEmail ? parsedMeta.buyerEmail : "",
           phone: "",
           address: parsedMeta && parsedMeta.shipToAddr ? parsedMeta.shipToAddr : "",
+          // Buying-group members always bill through the group's remit-to
+          ...(custType === "buying-group" ? { billToAddress: MIDSTATES_BILL_TO } : {}),
         };
         customers = [...customers, newCust];
         newCustLogs.push({
