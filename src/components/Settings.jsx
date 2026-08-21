@@ -32,6 +32,9 @@ export default function Settings({ data, setData }) {
   const [qboImportResult, setQboImportResult] = useState(null);
   const [qboStartDate, setQboStartDate] = useState("");
 
+  // Customer data cleanup
+  const [cleanupMsg, setCleanupMsg] = useState(null);
+
   // Team notification rules
   const [ruleForm, setRuleForm] = useState({ name: "", email: "", stage: "confirmed" });
   const [ruleError, setRuleError] = useState("");
@@ -81,6 +84,66 @@ export default function Settings({ data, setData }) {
     const result = await sendTestStageEmail(rule);
     setRuleTesting(null);
     setRuleTestResult({ rule, result });
+  };
+
+  // One-click normalization of customer classifications:
+  //   - bare "distributor" type -> Tier 1 Distributor (imports used to write
+  //     the raw value, so some records show an unlabeled type)
+  //   - every distributor gets Net 60 payment terms
+  //   - Farm & Home / Farm & Garden stores -> Buying Group
+  const runCustomerCleanup = () => {
+    const isBuyingGroupName = (n) => /farm\s*&\s*(home|garden)/i.test(n || "");
+    let tiers = 0;
+    let terms = 0;
+    let groups = 0;
+    (data.customers || []).forEach((c) => {
+      if (c.type === "distributor") tiers++;
+      if (isBuyingGroupName(c.name) && c.type !== "buying-group") groups++;
+      const effType = c.type === "distributor" ? "distributor-t1" : c.type;
+      if (
+        (effType === "distributor-t1" || effType === "distributor-t2") &&
+        c.paymentTerms !== "Net 60"
+      )
+        terms++;
+    });
+    if (tiers + terms + groups === 0) {
+      setCleanupMsg({ ok: true, text: "Nothing to clean up -- all customers already consistent." });
+      return;
+    }
+    if (
+      !confirm(
+        `Customer cleanup will:\n- Normalize ${tiers} "distributor" record(s) to Tier 1 Distributor\n- Set Net 60 terms on ${terms} distributor(s)\n- Mark ${groups} Farm & Home / Farm & Garden store(s) as Buying Group\n\nProceed?`,
+      )
+    )
+      return;
+    setData((d) => ({
+      ...d,
+      customers: (d.customers || []).map((c) => {
+        let next = { ...c };
+        if (next.type === "distributor") next.type = "distributor-t1";
+        if (isBuyingGroupName(next.name) && next.type !== "buying-group") next.type = "buying-group";
+        if (
+          (next.type === "distributor-t1" || next.type === "distributor-t2") &&
+          next.paymentTerms !== "Net 60"
+        )
+          next.paymentTerms = "Net 60";
+        return next;
+      }),
+      auditLog: [
+        ...(d.auditLog || []),
+        {
+          id: uid(),
+          ts: nowIso(),
+          type: "adjustment",
+          entity: "Customers",
+          description: `Customer cleanup: ${tiers} normalized to Tier 1 Distributor, ${terms} distributor(s) set to Net 60 terms, ${groups} marked Buying Group`,
+        },
+      ],
+    }));
+    setCleanupMsg({
+      ok: true,
+      text: `Cleaned up: ${tiers} normalized to Tier 1 Distributor, ${terms} set to Net 60 terms, ${groups} marked Buying Group.`,
+    });
   };
 
   const removeRule = (rule) => {
@@ -1164,6 +1227,66 @@ export default function Settings({ data, setData }) {
 
       {/* Historical data import (customer list + YOY sales sheet) */}
       <HistoryImport data={data} setData={setData} />
+
+      {/* Customer data cleanup */}
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 12,
+          padding: "20px 24px",
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: "#FEFCE8",
+              border: "1px solid #FDE68A",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 16,
+              fontWeight: 800,
+              color: "#CA8A04",
+            }}
+          >
+            &#10227;
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A" }}>
+              Customer Data Cleanup
+            </div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>
+              Normalizes classifications in one pass: bare &quot;distributor&quot; types become
+              Tier 1 Distributor, every distributor gets Net 60 payment terms, and Farm &amp;
+              Home / Farm &amp; Garden stores become Buying Group. Shows counts before applying.
+            </div>
+          </div>
+          <button style={{ ...BS, fontSize: 12, whiteSpace: "nowrap" }} onClick={runCustomerCleanup}>
+            Run Cleanup
+          </button>
+        </div>
+        {cleanupMsg && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: "10px 14px",
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              background: "#F0FDF4",
+              border: "1px solid #BBF7D0",
+              color: "#15803D",
+            }}
+          >
+            {cleanupMsg.text}
+          </div>
+        )}
+      </div>
 
       {/* Team Notifications */}
       <div

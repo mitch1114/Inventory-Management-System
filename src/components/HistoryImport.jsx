@@ -90,6 +90,7 @@ export default function HistoryImport({ data, setData }) {
         id: uid(),
         name: n.name,
         type: n.type === "distributor" ? "distributor-t1" : "dealer",
+        paymentTerms: n.type === "distributor" ? "Net 60" : "Net 30",
         email: "",
         phone: "",
         address: "",
@@ -109,7 +110,7 @@ export default function HistoryImport({ data, setData }) {
       const customersOut = [...(d.customers || []), ...newCustomers].map((c) => {
         const s = typeByNorm.get(normalizeName(c.name));
         return s && s.total > 0 && s.dist > s.total / 2 && (!c.type || c.type === "dealer")
-          ? { ...c, type: "distributor-t1" }
+          ? { ...c, type: "distributor-t1", paymentTerms: c.paymentTerms === "Net 60" ? c.paymentTerms : "Net 60" }
           : c;
       });
       return {
