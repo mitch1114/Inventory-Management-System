@@ -214,16 +214,27 @@ export default function Reports({ data }) {
         ),
       0,
     );
+  // Monthly demand (ordered value) vs invoiced (shipped value) -- side by
+  // side so order intake and outbound revenue can be compared.
   const byMonth = useMemo(() => {
     const m = {};
+    const bucket = (mo) => (m[mo] = m[mo] || { month: mo, ordered: 0, invoiced: 0 });
+    salesOrders
+      .filter((o) => o.fulfillmentStage !== "cancelled" && inRange(o))
+      .forEach((o) => {
+        const mo = (o.date || "").slice(0, 7);
+        if (!mo) return;
+        bucket(mo).ordered += o.lines.reduce((s, l) => s + l.qty * l.price, 0);
+      });
     shipped.forEach((o) => {
-      const mo = o.date.slice(0, 7);
-      m[mo] = (m[mo] || 0) + o.lines.reduce((s, l) => s + filledQty(l) * l.price, 0);
+      const mo = (o.date || "").slice(0, 7);
+      if (!mo) return;
+      bucket(mo).invoiced += o.lines.reduce((s, l) => s + filledQty(l) * l.price, 0);
     });
-    return Object.entries(m)
-      .sort()
-      .map(([month, rev]) => ({ month, rev: +rev.toFixed(2) }));
-  }, [shipped]);
+    return Object.values(m)
+      .sort((a, b) => a.month.localeCompare(b.month))
+      .map((r) => ({ ...r, ordered: +r.ordered.toFixed(2), invoiced: +r.invoiced.toFixed(2) }));
+  }, [salesOrders, shipped, rangeStart, rangeEnd]);
   const topProds = useMemo(() => {
     const m = {};
     shipped.forEach((o) =>
@@ -441,8 +452,8 @@ export default function Reports({ data }) {
           marginBottom: 20,
         }}
       >
-        <MetricCard value={fmt(allRevenue)} label="All Revenue (Top Line)" accent="#7C3AED" />
-        <MetricCard value={fmt(revenue)} label="Revenue (Shipped)" accent="#10B981" />
+        <MetricCard value={fmt(allRevenue)} label="Top Line Revenue" sub="customer ordered (demand)" accent="#7C3AED" />
+        <MetricCard value={fmt(revenue)} label="Invoiced Revenue" sub="shipped orders" accent="#10B981" />
         <MetricCard value={fmt(cogs)} label="COGS" sub="landed cost basis" accent="#EF4444" />
         <MetricCard value={fmt(revenue - cogs)} label="Gross Profit" accent="#7C3AED" />
         <MetricCard
@@ -454,28 +465,35 @@ export default function Reports({ data }) {
         <MetricCard value={fmt(boVal)} label="Backorder Value" accent="#F97316" />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <CC title="Monthly Revenue (Shipped)">
+        <CC title="Monthly Revenue — Top Line (Ordered) vs Invoiced (Shipped)">
           {byMonth.length === 0 ? (
             <div style={{ color: "#94A3B8", fontSize: 13, textAlign: "center", padding: "30px 0" }}>
-              No shipped orders yet
+              No orders in this period
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={byMonth}>
-                <XAxis dataKey="month" tick={{ fill: "#94A3B8", fontSize: 10 }} />
-                <YAxis tick={{ fill: "#94A3B8", fontSize: 10 }} />
-                <Tooltip
-                  contentStyle={{
-                    background: "#FFFFFF",
-                    border: "1px solid #CBD5E1",
-                    borderRadius: 8,
-                    color: "#0F172A",
-                  }}
-                  formatter={(v) => fmt(v)}
-                />
-                <Bar dataKey="rev" fill="#7C3AED" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height={185}>
+                <BarChart data={byMonth}>
+                  <XAxis dataKey="month" tick={{ fill: "#94A3B8", fontSize: 10 }} />
+                  <YAxis tick={{ fill: "#94A3B8", fontSize: 10 }} />
+                  <Tooltip
+                    contentStyle={{
+                      background: "#FFFFFF",
+                      border: "1px solid #CBD5E1",
+                      borderRadius: 8,
+                      color: "#0F172A",
+                    }}
+                    formatter={(v, name) => [fmt(v), name === "ordered" ? "Top Line (Ordered)" : "Invoiced (Shipped)"]}
+                  />
+                  <Bar dataKey="ordered" fill="#C4B5FD" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="invoiced" fill="#7C3AED" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+              <div style={{ display: "flex", gap: 16, justifyContent: "center", fontSize: 11, color: "#64748B", marginTop: 4 }}>
+                <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#C4B5FD", borderRadius: 2, marginRight: 5 }} />Top Line (Ordered)</span>
+                <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#7C3AED", borderRadius: 2, marginRight: 5 }} />Invoiced (Shipped)</span>
+              </div>
+            </>
           )}
         </CC>
         <CC title="Top Products by Revenue">
@@ -695,7 +713,7 @@ export default function Reports({ data }) {
                   letterSpacing: "0.06em",
                 }}
               >
-                Shipped Revenue (In Range)
+                Invoiced Revenue (In Range)
               </div>
               <div style={{ fontSize: 15, fontWeight: 800, color: "#0F172A", marginTop: 2 }}>
                 {fmt(custTotals.shippedRev)}
