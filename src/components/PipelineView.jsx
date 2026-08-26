@@ -74,14 +74,10 @@ export default function PipelineView({ data, setData }) {
     [data.products],
   );
   const skuToProdId = useMemo(() => buildScanIndex(data.products), [data.products]);
-  // Pre-orders with outstanding backorders are HELD out of the Confirmed
-  // column (they aren't pickable yet -- stock hasn't arrived). They live in
-  // their own strip and rejoin Confirmed automatically once receiving
-  // auto-fills their backorders.
-  const isPreHold = (o) =>
-    o.fulfillmentStage === "confirmed" &&
-    o.type === "preorder" &&
-    o.lines.some((l) => (l.qtyBackordered || 0) > 0);
+  // ALL confirmed pre-orders are HELD out of the Confirmed column -- they
+  // ship on their release window, not the moment stock exists, so they don't
+  // belong in the pick queue. Each card shows whether its stock has arrived.
+  const isPreHold = (o) => o.fulfillmentStage === "confirmed" && o.type === "preorder";
   const preHoldOrders = useMemo(() => data.salesOrders.filter(isPreHold), [data.salesOrders]);
   const stageOrders = useMemo(() => {
     const m = {};
@@ -749,11 +745,11 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#7C3AED" }} />
             <span style={{ fontWeight: 700, color: "#6D28D9", fontSize: 13 }}>
-              Pre-Orders — Awaiting Stock ({preHoldOrders.length})
+              Pre-Orders ({preHoldOrders.length})
             </span>
             <span style={{ fontSize: 11, color: "#7C3AED" }}>
-              Not in the pick queue. They move to Confirmed automatically as received stock
-              fills their backorders.
+              Held out of the pick queue. Received stock auto-fills them; pick when the ship
+              window arrives.
             </span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", gap: 8 }}>
@@ -800,17 +796,19 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                   </div>
                   <div
                     style={{
-                      background: "#FFF7ED",
-                      border: "1px solid #FED7AA",
+                      background: boUnits > 0 ? "#FFF7ED" : "#F0FDF4",
+                      border: `1px solid ${boUnits > 0 ? "#FED7AA" : "#BBF7D0"}`,
                       borderRadius: 6,
                       padding: "3px 8px",
                       marginBottom: 6,
                       fontSize: 11,
-                      color: "#9A3412",
+                      color: boUnits > 0 ? "#9A3412" : "#15803D",
                       fontWeight: 600,
                     }}
                   >
-                    {fmtNum(boUnits)} of {fmtNum(orderedUnits)} units awaiting stock
+                    {boUnits > 0
+                      ? `${fmtNum(boUnits)} of ${fmtNum(orderedUnits)} units awaiting stock`
+                      : "All units in stock — ready to pick"}
                   </div>
                   {o.requestedShipDate && (
                     <div style={{ fontSize: 11, color: "#64748B", marginBottom: 6 }}>
@@ -837,21 +835,25 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                     </button>
                     <button
                       onClick={() => openAdvance(o)}
-                      title="Force into picking now (partial fills allowed)"
+                      title={
+                        boUnits > 0
+                          ? "Force into picking now (partial fills allowed)"
+                          : "Move to Picked & Packed"
+                      }
                       style={{
                         flex: 1,
                         padding: "5px",
                         borderRadius: 7,
-                        border: "1px solid #DDD6FE",
-                        background: "#FAF5FF",
-                        color: "#7C3AED",
+                        border: `1px solid ${boUnits > 0 ? "#DDD6FE" : "#7C3AED"}`,
+                        background: boUnits > 0 ? "#FAF5FF" : "#7C3AED",
+                        color: boUnits > 0 ? "#7C3AED" : "#FFFFFF",
                         fontWeight: 700,
                         fontSize: 11,
                         cursor: "pointer",
                         fontFamily: "inherit",
                       }}
                     >
-                      Pick Anyway
+                      {boUnits > 0 ? "Pick Anyway" : "Pick Now →"}
                     </button>
                   </div>
                 </div>
