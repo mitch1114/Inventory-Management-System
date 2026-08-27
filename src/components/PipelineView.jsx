@@ -74,12 +74,18 @@ export default function PipelineView({ data, setData }) {
     [data.products],
   );
   const skuToProdId = useMemo(() => buildScanIndex(data.products), [data.products]);
+  // ALL confirmed pre-orders are HELD out of the Confirmed column -- they
+  // ship on their release window, not the moment stock exists, so they don't
+  // belong in the pick queue. Each card shows whether its stock has arrived.
+  const isPreHold = (o) => o.fulfillmentStage === "confirmed" && o.type === "preorder";
+  const preHoldOrders = useMemo(() => data.salesOrders.filter(isPreHold), [data.salesOrders]);
   const stageOrders = useMemo(() => {
     const m = {};
     STAGES.forEach((s) => {
       m[s] = [];
     });
     data.salesOrders.forEach((o) => {
+      if (isPreHold(o)) return;
       if (m[o.fulfillmentStage]) m[o.fulfillmentStage].push(o);
     });
     return m;
@@ -198,14 +204,18 @@ export default function PipelineView({ data, setData }) {
       .map((l) => {
         const p = prodMap[l.productId];
         const qty = l.qtyFilled != null ? l.qtyFilled : l.qty;
-        if (qty <= 0) return "";
-        return `<tr>
-          <td class="chk">&#9744;</td>
+        const bo = l.qtyBackordered != null ? l.qtyBackordered : 0;
+        if (qty <= 0 && bo <= 0) return "";
+        // Fully backordered lines stay on the sheet (grayed) so pickers see
+        // the complete order -- they just have nothing to pick yet.
+        return `<tr${qty <= 0 ? ' class="borow"' : ""}>
+          <td class="chk">${qty > 0 ? "&#9744;" : ""}</td>
           <td class="mono">${esc(p ? p.sku : "?")}</td>
           <td>${esc(p ? p.name : "--")}</td>
           <td class="mono">${esc(p && p.upc ? p.upc : "")}</td>
           <td class="price">$${esc((l.price || 0).toFixed(2))}</td>
-          <td class="qty">${qty}</td>
+          <td class="qty">${qty > 0 ? qty : "--"}</td>
+          <td class="bo">${bo > 0 ? bo : ""}</td>
           <td class="line"></td>
         </tr>`;
       })
@@ -215,6 +225,7 @@ export default function PipelineView({ data, setData }) {
       (s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty) * (l.price || 0),
       0,
     );
+    const totalBO = o.lines.reduce((s, l) => s + (l.qtyBackordered != null ? l.qtyBackordered : 0), 0);
     const chan = orderChannelLabel(o);
     const html = `<!DOCTYPE html><html><head><title>Pick Sheet ${esc(o.orderNum)}</title>
 <style>
@@ -231,6 +242,8 @@ export default function PipelineView({ data, setData }) {
   .mono { font-family: monospace; }
   .price { width: 70px; text-align: right; font-family: monospace; }
   .qty { width: 60px; text-align: center; font-weight: bold; font-size: 15px; }
+  .bo { width: 50px; text-align: center; font-weight: bold; color: #c2410c; }
+  .borow td { color: #999; }
   .line { width: 90px; }
   .totals { margin-top: 10px; font-size: 14px; font-weight: bold; }
   .sig { margin-top: 36px; display: flex; gap: 40px; font-size: 13px; }
@@ -245,11 +258,11 @@ export default function PipelineView({ data, setData }) {
   <div><b>Order date:</b> ${esc(fmtDate(o.date))}</div>
   <div><b>Requested ship:</b> ${esc(o.requestedShipDate ? fmtDate(o.requestedShipDate) : "--")}</div>
 </div>
-${o.specialInstructions ? `<div class="note"><b>Special Instructions:</b> ${esc(o.specialInstructions)}</div>` : ""}
+${o.specialInstructions ? `<div class="note"><b>Comments:</b> ${esc(o.specialInstructions)}</div>` : ""}
 ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
-<table><thead><tr><th></th><th>SKU</th><th>Product</th><th>UPC</th><th>Unit Price</th><th>Qty</th><th>Picked</th></tr></thead>
+<table><thead><tr><th></th><th>SKU</th><th>Product</th><th>UPC</th><th>Unit Price</th><th>Pick Qty</th><th>BO</th><th>Picked</th></tr></thead>
 <tbody>${rows}</tbody></table>
-<div class="totals">Total: ${o.lines.length} lines &middot; ${totalUnits} units &middot; $${esc(totalValue.toFixed(2))}</div>
+<div class="totals">Total: ${o.lines.length} lines &middot; ${totalUnits} units to pick${totalBO > 0 ? ` &middot; ${totalBO} backordered (do not pick)` : ""} &middot; $${esc(totalValue.toFixed(2))}</div>
 <div class="sig"><span>Picked by</span><span>Checked by</span><span>Date</span></div>
 <script>window.onload = function(){ window.print(); };</script>
 </body></html>`;
@@ -718,6 +731,138 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
         </span>
       </div>
 
+      {/* Pre-orders awaiting stock -- held out of the pick queue */}
+      {preHoldOrders.length > 0 && (
+        <div
+          style={{
+            background: "#FAF5FF",
+            border: "1px solid #DDD6FE",
+            borderRadius: 12,
+            padding: "12px 14px",
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#7C3AED" }} />
+            <span style={{ fontWeight: 700, color: "#6D28D9", fontSize: 13 }}>
+              Pre-Orders ({preHoldOrders.length})
+            </span>
+            <span style={{ fontSize: 11, color: "#7C3AED" }}>
+              Held out of the pick queue. Received stock auto-fills them; pick when the ship
+              window arrives.
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", gap: 8 }}>
+            {preHoldOrders.map((o) => {
+              const orderedUnits = o.lines.reduce((s, l) => s + l.qty, 0);
+              const boUnits = o.lines.reduce((s, l) => s + (l.qtyBackordered || 0), 0);
+              const total = o.lines.reduce((s, l) => s + l.qty * l.price, 0);
+              return (
+                <div
+                  key={o.id}
+                  style={{
+                    background: "#FFFFFF",
+                    border: "1px solid #DDD6FE",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 800,
+                        color: "#6D28D9",
+                        fontFamily: "monospace",
+                        cursor: "pointer",
+                        textDecoration: "underline",
+                        textDecorationColor: "#DDD6FE",
+                        textUnderlineOffset: 2,
+                      }}
+                      onClick={() => setDetailOrder(o)}
+                    >
+                      {o.orderNum}
+                    </span>
+                    <Badge status="preorder" label="Pre-order" />
+                  </div>
+                  <div style={{ fontSize: 13, color: "#0F172A", fontWeight: 600 }}>{o.customer}</div>
+                  {o.dealerPORef && (
+                    <div style={{ fontSize: 11, fontFamily: "monospace", color: "#64748B" }}>
+                      {o.dealerPORef}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: "#64748B", margin: "4px 0 6px" }}>
+                    {fmtDate(o.date)} &middot; {orderedUnits} units &middot; {fmt(total)}
+                  </div>
+                  <div
+                    style={{
+                      background: boUnits > 0 ? "#FFF7ED" : "#F0FDF4",
+                      border: `1px solid ${boUnits > 0 ? "#FED7AA" : "#BBF7D0"}`,
+                      borderRadius: 6,
+                      padding: "3px 8px",
+                      marginBottom: 6,
+                      fontSize: 11,
+                      color: boUnits > 0 ? "#9A3412" : "#15803D",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {boUnits > 0
+                      ? `${fmtNum(boUnits)} of ${fmtNum(orderedUnits)} units awaiting stock`
+                      : "All units in stock — ready to pick"}
+                  </div>
+                  {o.requestedShipDate && (
+                    <div style={{ fontSize: 11, color: "#64748B", marginBottom: 6 }}>
+                      Requested ship: {fmtDate(o.requestedShipDate)}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => setEditOrder(o)}
+                      style={{
+                        flex: 1,
+                        padding: "5px",
+                        borderRadius: 7,
+                        border: "1px solid #E2E8F0",
+                        background: "#F8FAFC",
+                        color: "#64748B",
+                        fontWeight: 700,
+                        fontSize: 11,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => openAdvance(o)}
+                      title={
+                        boUnits > 0
+                          ? "Force into picking now (partial fills allowed)"
+                          : "Move to Picked & Packed"
+                      }
+                      style={{
+                        flex: 1,
+                        padding: "5px",
+                        borderRadius: 7,
+                        border: `1px solid ${boUnits > 0 ? "#DDD6FE" : "#7C3AED"}`,
+                        background: boUnits > 0 ? "#FAF5FF" : "#7C3AED",
+                        color: boUnits > 0 ? "#7C3AED" : "#FFFFFF",
+                        fontWeight: 700,
+                        fontSize: 11,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      {boUnits > 0 ? "Pick Anyway" : "Pick Now →"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Kanban columns */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
         {COLUMNS.map((colDef) => {
@@ -830,7 +975,9 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                           <Badge status={stage} label={STAGE_LABEL[stage]} />
                         )}
                         {hasBO && <Badge status="backordered" label="Has BO" />}
-                        {o.type === "preorder" && !hasBO && <Badge status="preorder" label="Pre-order" />}
+                        {o.type === "preorder" && !hasBO && (
+                          <Badge status="preorder" label="Pre-order · stock ready" />
+                        )}
                       </div>
                       <div style={{ fontSize: 13, color: "#0F172A", fontWeight: 600, marginBottom: 2 }}>
                         {o.customer}
@@ -1126,7 +1273,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
           </div>
           {detailOrder.specialInstructions && (
             <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400E", marginBottom: 10 }}>
-              <strong>Special Instructions:</strong> {detailOrder.specialInstructions}
+              <strong>Comments:</strong> {detailOrder.specialInstructions}
             </div>
           )}
           {detailOrder.notes && (

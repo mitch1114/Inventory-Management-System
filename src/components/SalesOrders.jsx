@@ -756,7 +756,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
               color: "#92400E",
             }}
           >
-            <strong>Special Instructions:</strong> {order.specialInstructions}
+            <strong>Comments:</strong> {order.specialInstructions}
           </div>
         )}
 

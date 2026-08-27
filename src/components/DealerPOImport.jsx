@@ -1038,12 +1038,12 @@ export default function DealerPOImport({ data, setData, onClose }) {
               />
             </Field>
 
-            <Field label="Special Instructions">
+            <Field label="Comments">
               <textarea
                 style={{ ...IS, minHeight: 40, resize: "vertical", marginTop: 4 }}
                 value={specialInstructions}
                 onChange={(e) => setSpecialInstructions(e.target.value)}
-                placeholder="From the order writer's Special Instructions / Comments field"
+                placeholder="From the order writer's Comments field"
               />
             </Field>
           </div>
@@ -1383,7 +1383,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
                     borderRadius: 6,
                   }}
                 >
-                  <strong>Special Instructions:</strong> {specialInstructions}
+                  <strong>Comments:</strong> {specialInstructions}
                 </div>
               )}
             </div>
