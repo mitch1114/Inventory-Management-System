@@ -7,13 +7,20 @@ import { uid, nowIso, todayIso, nextSoNumber } from "./utils";
 export function computeInventory(products, salesOrders) {
   const locked = {};
   const bord = {};
+  const preLocked = {}; // pre-order units already filled (subset of locked)
+  const preAwaiting = {}; // pre-order units still awaiting stock (subset of backordered)
   (salesOrders || []).forEach((o) => {
     if (!LOCKING.has(o.fulfillmentStage)) return;
+    const isPre = o.type === "preorder";
     (o.lines || []).forEach((l) => {
       const filled = l.qtyFilled != null ? l.qtyFilled : l.qty;
       if (filled > 0) locked[l.productId] = (locked[l.productId] || 0) + filled;
       const bo = l.qtyBackordered != null ? l.qtyBackordered : 0;
       if (bo > 0) bord[l.productId] = (bord[l.productId] || 0) + bo;
+      if (isPre) {
+        if (filled > 0) preLocked[l.productId] = (preLocked[l.productId] || 0) + filled;
+        if (bo > 0) preAwaiting[l.productId] = (preAwaiting[l.productId] || 0) + bo;
+      }
     });
   });
   return products.map((p) => ({
@@ -21,6 +28,9 @@ export function computeInventory(products, salesOrders) {
     locked: locked[p.id] || 0,
     backordered: bord[p.id] || 0,
     available: Math.max(0, p.onHand - (locked[p.id] || 0)),
+    preOrderLocked: preLocked[p.id] || 0,
+    preOrderAwaiting: preAwaiting[p.id] || 0,
+    preOrderUnits: (preLocked[p.id] || 0) + (preAwaiting[p.id] || 0),
   }));
 }
 
