@@ -209,7 +209,7 @@ function SkuDrawer({ product, data, setData, onClose, onEdit }) {
           background: "#F8FAFC",
           borderBottom: "1px solid #E2E8F0",
           display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
+          gridTemplateColumns: `repeat(${computed.preOrderUnits > 0 ? 5 : 4}, 1fr)`,
           gap: 8,
           flexShrink: 0,
         }}
@@ -218,6 +218,9 @@ function SkuDrawer({ product, data, setData, onClose, onEdit }) {
           { label: "On Hand", value: fmtNum(computed.onHand), color: "#0F172A" },
           { label: "Locked", value: computed.locked > 0 ? `-${fmtNum(computed.locked)}` : "--", color: computed.locked > 0 ? "#EAB308" : "#94A3B8" },
           { label: "Backordered", value: computed.backordered > 0 ? fmtNum(computed.backordered) : "--", color: computed.backordered > 0 ? "#F97316" : "#94A3B8" },
+          ...(computed.preOrderUnits > 0
+            ? [{ label: "Pre-Orders", value: fmtNum(computed.preOrderUnits), color: "#7C3AED" }]
+            : []),
           { label: "Available", value: fmtNum(computed.available), color: computed.available === 0 ? "#DC2626" : computed.available <= product.reorderPoint ? "#854D0E" : "#15803D" },
         ].map((s) => (
           <div key={s.label}>
@@ -306,6 +309,22 @@ function SkuDrawer({ product, data, setData, onClose, onEdit }) {
                     {o.orderNum} &middot; {o.customer} &middot;{" "}
                     <Badge status={o.fulfillmentStage} label={o.fulfillmentStage} />
                     {" "}&middot; {o.lines.filter((l) => l.productId === product.id).reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0)} units
+                    {o.type === "preorder" && (
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          background: "#F5F3FF",
+                          border: "1px solid #DDD6FE",
+                          color: "#6D28D9",
+                          borderRadius: 20,
+                          padding: "1px 8px",
+                          fontSize: 10,
+                          fontWeight: 800,
+                        }}
+                      >
+                        PRE-ORDER
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -612,6 +631,8 @@ export default function Products({ data, setData }) {
       locked: p.locked,
       available: p.available,
       backordered: p.backordered,
+      preOrderUnits: p.preOrderUnits,
+      preOrderAwaiting: p.preOrderAwaiting,
       reorderPoint: p.reorderPoint,
       reorderQty: p.reorderQty,
     }));
@@ -626,6 +647,8 @@ export default function Products({ data, setData }) {
       "locked",
       "available",
       "backordered",
+      "preOrderUnits",
+      "preOrderAwaiting",
       "reorderPoint",
       "reorderQty",
     ]);
@@ -785,7 +808,7 @@ export default function Products({ data, setData }) {
 
       {/* Product Table */}
       <Table
-        headers={["SKU", "UPC", "Product", "Category", "Cost", "Landed", "Sell", "On Hand", "Locked", "Available", "Status", "Actions"]}
+        headers={["SKU", "UPC", "Product", "Category", "Cost", "Landed", "Sell", "On Hand", "Locked", "Pre-Orders", "Available", "Status", "Actions"]}
         empty={filtered.length === 0 ? "No products found." : null}
       >
         {filtered.map((p, i) => {
@@ -836,6 +859,23 @@ export default function Products({ data, setData }) {
               <TD mono>{fmtNum(p.onHand)}</TD>
               <TD mono accent={p.locked > 0 ? "#EAB308" : undefined}>
                 {p.locked > 0 ? `-${fmtNum(p.locked)}` : "--"}
+              </TD>
+              <TD mono accent={p.preOrderUnits > 0 ? "#7C3AED" : undefined}>
+                {p.preOrderUnits > 0 ? (
+                  <span
+                    title={`${fmtNum(p.preOrderLocked)} in stock (locked) · ${fmtNum(p.preOrderAwaiting)} awaiting stock`}
+                    style={{ cursor: "help" }}
+                  >
+                    {fmtNum(p.preOrderUnits)}
+                    {p.preOrderAwaiting > 0 && (
+                      <span style={{ fontSize: 10, color: "#A78BFA", marginLeft: 4 }}>
+                        ({fmtNum(p.preOrderAwaiting)} awaiting)
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  "--"
+                )}
               </TD>
               <TD>
                 <span

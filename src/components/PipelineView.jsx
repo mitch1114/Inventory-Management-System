@@ -1186,7 +1186,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560, marginTop: 12 }}>
           <thead>
             <tr>
-              {["SKU", "Product", "On Hand", "Locked", "Backordered", "Available"].map((h) => (
+              {["SKU", "Product", "On Hand", "Locked", "Backordered", "Pre-Orders", "Available"].map((h) => (
                 <th
                   key={h}
                   style={{
@@ -1234,6 +1234,21 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                   }}
                 >
                   {p.backordered > 0 ? fmtNum(p.backordered) : "--"}
+                </td>
+                <td
+                  style={{
+                    padding: "8px 12px",
+                    fontSize: 13,
+                    color: p.preOrderUnits > 0 ? "#7C3AED" : "#64748B",
+                    fontWeight: p.preOrderUnits > 0 ? 700 : 400,
+                  }}
+                  title={
+                    p.preOrderUnits > 0
+                      ? `${fmtNum(p.preOrderLocked)} in stock (locked) · ${fmtNum(p.preOrderAwaiting)} awaiting stock`
+                      : undefined
+                  }
+                >
+                  {p.preOrderUnits > 0 ? fmtNum(p.preOrderUnits) : "--"}
                 </td>
                 <td style={{ padding: "8px 12px" }}>
                   <span
