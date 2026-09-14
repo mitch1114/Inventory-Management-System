@@ -94,6 +94,16 @@ const AUTO_STEPS = [
   { key: "done", label: "Done" },
 ];
 
+// Dealers reuse old order-writer files, so a stale date cell (sometimes years
+// old) must not become the order -- and therefore the QBO invoice -- date.
+// Anything more than 60 days old or over a year in the future imports as today;
+// the date stays editable in the review step.
+const saneOrderDate = (iso) => {
+  if (!iso) return todayIso();
+  const age = (Date.now() - new Date(iso + "T12:00:00").getTime()) / 86400000;
+  return age > 60 || age < -365 ? todayIso() : iso;
+};
+
 // =============================================================================
 // DealerPOImport component
 // =============================================================================
@@ -251,7 +261,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
             setDealerInfo({
               customer: meta.customerName || "",
               poRef: meta.poNumber || "",
-              date: meta.orderDate || todayIso(),
+              date: saneOrderDate(meta.orderDate),
               notes: [
                 meta.buyerName ? `Buyer: ${meta.buyerName}` : "",
                 meta.buyerEmail ? meta.buyerEmail : "",
@@ -383,6 +393,13 @@ export default function DealerPOImport({ data, setData, onClose }) {
           });
           setChannel("dealer");
           setRequestedShipDate(meta.requestedShipDate || "");
+          // A ship window months out (Scheels program / new-store orders) is a
+          // pre-order: hold the units instead of allocating stock that would
+          // sit locked until the window. Still switchable in the review step.
+          const daysOut = meta.requestedShipDate
+            ? (new Date(meta.requestedShipDate + "T12:00:00").getTime() - Date.now()) / 86400000
+            : 0;
+          setOrderKind(daysOut > 45 ? "preorder" : "regular");
           setSpecialInstructions(
             [
               meta.poType ? `SPS PO Type: ${meta.poType}` : "",
@@ -394,7 +411,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
           setDealerInfo({
             customer: meta.customer || "",
             poRef: meta.poNumber || "",
-            date: meta.orderDate || todayIso(),
+            date: saneOrderDate(meta.orderDate),
             notes: [
               "SPS Commerce EDI order",
               meta.buyerName ? `Buyer: ${meta.buyerName}` : "",
