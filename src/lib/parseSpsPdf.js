@@ -122,9 +122,12 @@ export function parseSpsOrder(pages) {
   const shipToAddr = shipToLines.slice(1).join(" | ");
 
   // --- Line items ----------------------------------------------------------------
-  // Anchor on: <line#> ... <UPC 12-14 digits> ... Unit Price: <price> <qty> Each <total>
+  // Anchor on: <line#> ... <UPC 12-14 digits> ... Unit Price: [<price>] <qty> Each <total>
+  // Some Scheels layouts render the unit-cost value a visual row BELOW the
+  // "Unit Price:" label (stacked UNIT COST / RETAIL PRICE cell), so the price
+  // is optional on the anchor row and gets derived from total / qty instead.
   const ITEM_RE =
-    /^(\d{1,3})\s+(.*?)\b(\d{12,14})\b\s+(.*?)Unit Price:\s*([\d,]+\.\d{2})\s+([\d,]+(?:\.\d+)?)\s+Each\s+([\d,]+\.\d{2})/;
+    /^(\d{1,3})\s+(.*?)\b(\d{12,14})\b\s+(.*?)Unit Price:\s*(?:([\d,]+\.\d{2})\s+)?([\d,]+(?:\.\d+)?)\s+Each\s+([\d,]+\.\d{2})/;
   const money = (s) => parseFloat(String(s).replace(/,/g, "")) || 0;
   // SKU-shaped: dashed codes (SPS-51S-MF-C) or dashless letter+digit codes of
   // 6+ chars (DF4CLR300). All-digit tokens (UPCs, buyer item numbers) excluded.
@@ -171,15 +174,23 @@ export function parseSpsOrder(pages) {
         .replace(/\s+/g, " ")
         .trim();
 
+      const qty = Math.round(money(qtyS));
+      const total = money(totalS);
+      const price = priceS
+        ? money(priceS)
+        : qty > 0
+          ? Math.round((total / qty) * 100) / 100
+          : 0;
+
       lines.push({
         lineNo: Number(lineNo),
         sku,
         buyerSku,
         upc,
         desc,
-        qty: Math.round(money(qtyS)),
-        price: money(priceS),
-        total: money(totalS),
+        qty,
+        price,
+        total,
       });
     }
   }

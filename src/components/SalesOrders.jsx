@@ -53,7 +53,11 @@ function printQboInvoices(orders, prodMap, customers) {
       const cust = customers.find(
         (c) => c.name.toLowerCase().trim() === String(o.customer || "").toLowerCase().trim(),
       ) || matchCustomer(o.customer, customers);
-      const terms = (cust && cust.paymentTerms) || "Net 30";
+      // Terms come from the customer record; without one, distributors
+      // default to Net 60 (house policy), everyone else Net 30.
+      const terms =
+        (cust && cust.paymentTerms) ||
+        (cust && String(cust.type || "").startsWith("distributor") ? "Net 60" : "Net 30");
       const invDate = (o.shipment && o.shipment.shipDate) || o.date;
       // Buying-group members (Runnings, Farm & Home...) bill through the
       // group's remit-to; everyone else bills to their own record.
