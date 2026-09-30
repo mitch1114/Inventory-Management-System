@@ -1,38 +1,115 @@
 import { LOCKING, STAGE_LABEL } from "./constants";
-import { uid, nowIso, todayIso, nextSoNumber } from "./utils";
+import { uid, nowIso, todayIso, nextSoNumber, fmtNum } from "./utils";
 
 // --- Core inventory engine ----------------------------------------------------
-// available = onHand - locked (locked = all units in confirmed/picked/booked orders)
+// available = onHand - locked - preOrderReserved
+//   locked           = filled units in confirmed/picked/booked orders
+//   preOrderReserved = on-hand stock set aside for confirmed pre-orders' unfilled
+//                      units (see preOrderCoverage)
 // onHand only decrements when "shipped"
-export function computeInventory(products, salesOrders) {
+
+const lineFilled = (l) => (l.qtyFilled != null ? l.qtyFilled : l.qty);
+const lineBO = (l) => (l.qtyBackordered != null ? l.qtyBackordered : 0);
+
+function lockedByProduct(salesOrders) {
   const locked = {};
+  (salesOrders || []).forEach((o) => {
+    if (!LOCKING.has(o.fulfillmentStage)) return;
+    (o.lines || []).forEach((l) => {
+      const f = lineFilled(l);
+      if (f > 0) locked[l.productId] = (locked[l.productId] || 0) + f;
+    });
+  });
+  return locked;
+}
+
+/**
+ * Reserve free on-hand stock (onHand - locked) for the unfilled units of
+ * confirmed pre-orders, earliest ship window first. Pre-orders import with
+ * every unit on backorder so they don't grab stock at import time; this keeps
+ * that stock from also being promised to other orders until the pre-order is
+ * picked (reserved units become real fills then) or receiving fills it.
+ *
+ * Returns { byLine: { "<orderId>:<lineIdx>": coveredQty }, byProduct: { pid: reservedQty } }.
+ */
+export function preOrderCoverage(products, salesOrders, lockedMap) {
+  const locked = lockedMap || lockedByProduct(salesOrders);
+  const free = {};
+  (products || []).forEach((p) => {
+    free[p.id] = Math.max(0, (p.onHand || 0) - (locked[p.id] || 0));
+  });
+  const byLine = {};
+  const byProduct = {};
+  const shipKey = (o) => o.requestedShipDate || o.date || "";
+  (salesOrders || [])
+    .filter((o) => o.fulfillmentStage === "confirmed" && o.type === "preorder")
+    .sort(
+      (a, b) =>
+        shipKey(a).localeCompare(shipKey(b)) ||
+        (a.date || "").localeCompare(b.date || "") ||
+        (a.orderNum || "").localeCompare(b.orderNum || ""),
+    )
+    .forEach((o) => {
+      (o.lines || []).forEach((l, i) => {
+        const bo = lineBO(l);
+        if (bo <= 0) return;
+        const cover = Math.min(bo, free[l.productId] || 0);
+        if (cover <= 0) return;
+        free[l.productId] -= cover;
+        byLine[`${o.id}:${i}`] = cover;
+        byProduct[l.productId] = (byProduct[l.productId] || 0) + cover;
+      });
+    });
+  return { byLine, byProduct };
+}
+
+export function computeInventory(products, salesOrders) {
+  const locked = lockedByProduct(salesOrders);
   const bord = {};
   const preLocked = {}; // pre-order units already filled (subset of locked)
-  const preAwaiting = {}; // pre-order units still awaiting stock (subset of backordered)
+  const preBO = {}; // pre-order units not yet filled
   (salesOrders || []).forEach((o) => {
     if (!LOCKING.has(o.fulfillmentStage)) return;
     const isPre = o.type === "preorder";
     (o.lines || []).forEach((l) => {
-      const filled = l.qtyFilled != null ? l.qtyFilled : l.qty;
-      if (filled > 0) locked[l.productId] = (locked[l.productId] || 0) + filled;
-      const bo = l.qtyBackordered != null ? l.qtyBackordered : 0;
+      const filled = lineFilled(l);
+      const bo = lineBO(l);
       if (bo > 0) bord[l.productId] = (bord[l.productId] || 0) + bo;
       if (isPre) {
         if (filled > 0) preLocked[l.productId] = (preLocked[l.productId] || 0) + filled;
-        if (bo > 0) preAwaiting[l.productId] = (preAwaiting[l.productId] || 0) + bo;
+        if (bo > 0) preBO[l.productId] = (preBO[l.productId] || 0) + bo;
       }
     });
   });
-  return products.map((p) => ({
-    ...p,
-    locked: locked[p.id] || 0,
-    backordered: bord[p.id] || 0,
-    available: Math.max(0, p.onHand - (locked[p.id] || 0)),
-    preOrderLocked: preLocked[p.id] || 0,
-    preOrderAwaiting: preAwaiting[p.id] || 0,
-    preOrderUnits: (preLocked[p.id] || 0) + (preAwaiting[p.id] || 0),
-  }));
+  const { byProduct: reserved } = preOrderCoverage(products, salesOrders, locked);
+  return products.map((p) => {
+    const res = reserved[p.id] || 0;
+    const lk = locked[p.id] || 0;
+    return {
+      ...p,
+      locked: lk,
+      // Backordered = units owed that NO stock covers (reserved pre-order
+      // units are covered by on-hand stock, so they aren't short).
+      backordered: Math.max(0, (bord[p.id] || 0) - res),
+      preOrderReserved: res,
+      available: Math.max(0, p.onHand - lk - res),
+      preOrderLocked: preLocked[p.id] || 0,
+      preOrderAwaiting: Math.max(0, (preBO[p.id] || 0) - res),
+      preOrderUnits: (preLocked[p.id] || 0) + (preBO[p.id] || 0),
+    };
+  });
 }
+
+// Hover breakdown for the Pre-Orders inventory column
+export const preOrderTip = (p) =>
+  [
+    `${fmtNum(p.preOrderUnits)} units on open pre-orders:`,
+    p.preOrderReserved > 0 ? `• ${fmtNum(p.preOrderReserved)} reserved from on-hand stock (not available to other orders)` : "",
+    p.preOrderLocked > 0 ? `• ${fmtNum(p.preOrderLocked)} already filled (counted in Locked)` : "",
+    p.preOrderAwaiting > 0 ? `• ${fmtNum(p.preOrderAwaiting)} awaiting stock (auto-fill on receiving)` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
 // adjustedLines: optional array of { productId, qtyFilled } to override fill quantities
 export function advanceStage(data, orderId, newStage, shipInfo, adjustedLines) {
