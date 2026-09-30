@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef } from "react";
 import { LOCKING } from "../lib/constants";
-import { computeInventory } from "../lib/inventory";
+import { computeInventory, preOrderTip } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, toCSV, dlCSV, parseCSV } from "../lib/utils";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD } from "./ui";
 
@@ -217,19 +217,28 @@ function SkuDrawer({ product, data, setData, onClose, onEdit }) {
         {[
           { label: "On Hand", value: fmtNum(computed.onHand), color: "#0F172A" },
           { label: "Locked", value: computed.locked > 0 ? `-${fmtNum(computed.locked)}` : "--", color: computed.locked > 0 ? "#EAB308" : "#94A3B8" },
-          { label: "Backordered", value: computed.backordered > 0 ? fmtNum(computed.backordered) : "--", color: computed.backordered > 0 ? "#F97316" : "#94A3B8" },
           ...(computed.preOrderUnits > 0
-            ? [{ label: "Pre-Orders", value: fmtNum(computed.preOrderUnits), color: "#7C3AED" }]
+            ? [
+                {
+                  label: "Pre-Order Reserved",
+                  value: computed.preOrderReserved > 0 ? `-${fmtNum(computed.preOrderReserved)}` : "0",
+                  color: "#7C3AED",
+                  sub: computed.preOrderAwaiting > 0 ? `+${fmtNum(computed.preOrderAwaiting)} awaiting stock` : "",
+                  tip: preOrderTip(computed),
+                },
+              ]
             : []),
           { label: "Available", value: fmtNum(computed.available), color: computed.available === 0 ? "#DC2626" : computed.available <= product.reorderPoint ? "#854D0E" : "#15803D" },
+          { label: "Backordered", value: computed.backordered > 0 ? fmtNum(computed.backordered) : "--", color: computed.backordered > 0 ? "#F97316" : "#94A3B8" },
         ].map((s) => (
-          <div key={s.label}>
+          <div key={s.label} title={s.tip || undefined}>
             <div style={{ fontSize: 10, color: "#64748B", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
               {s.label}
             </div>
             <div style={{ fontSize: 18, fontWeight: 800, color: s.color, marginTop: 2 }}>
               {s.value}
             </div>
+            {s.sub && <div style={{ fontSize: 10, color: "#C2410C", fontWeight: 600 }}>{s.sub}</div>}
           </div>
         ))}
       </div>
@@ -632,6 +641,7 @@ export default function Products({ data, setData }) {
       available: p.available,
       backordered: p.backordered,
       preOrderUnits: p.preOrderUnits,
+      preOrderReserved: p.preOrderReserved,
       preOrderAwaiting: p.preOrderAwaiting,
       reorderPoint: p.reorderPoint,
       reorderQty: p.reorderQty,
@@ -648,6 +658,7 @@ export default function Products({ data, setData }) {
       "available",
       "backordered",
       "preOrderUnits",
+      "preOrderReserved",
       "preOrderAwaiting",
       "reorderPoint",
       "reorderQty",
@@ -763,6 +774,12 @@ export default function Products({ data, setData }) {
             {data.products.length} product{data.products.length !== 1 ? "s" : ""} &middot;{" "}
             {fmtNum(computedProds.reduce((s, p) => s + p.onHand, 0))} total on hand &middot;{" "}
             {fmtNum(computedProds.reduce((s, p) => s + p.available, 0))} available
+            {computedProds.some((p) => p.preOrderReserved > 0) && (
+              <>
+                {" "}(after {fmtNum(computedProds.reduce((s, p) => s + p.preOrderReserved, 0))} reserved for
+                pre-orders)
+              </>
+            )}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -860,16 +877,13 @@ export default function Products({ data, setData }) {
               <TD mono accent={p.locked > 0 ? "#EAB308" : undefined}>
                 {p.locked > 0 ? `-${fmtNum(p.locked)}` : "--"}
               </TD>
-              <TD mono accent={p.preOrderUnits > 0 ? "#7C3AED" : undefined}>
+              <TD mono accent={p.preOrderReserved > 0 ? "#7C3AED" : undefined}>
                 {p.preOrderUnits > 0 ? (
-                  <span
-                    title={`${fmtNum(p.preOrderLocked)} in stock (locked) · ${fmtNum(p.preOrderAwaiting)} awaiting stock`}
-                    style={{ cursor: "help" }}
-                  >
-                    {fmtNum(p.preOrderUnits)}
+                  <span title={preOrderTip(p)} style={{ cursor: "help" }}>
+                    {p.preOrderReserved > 0 ? `-${fmtNum(p.preOrderReserved)}` : "0"}
                     {p.preOrderAwaiting > 0 && (
-                      <span style={{ fontSize: 10, color: "#A78BFA", marginLeft: 4 }}>
-                        ({fmtNum(p.preOrderAwaiting)} awaiting)
+                      <span style={{ display: "block", fontSize: 10, color: "#C2410C" }}>
+                        +{fmtNum(p.preOrderAwaiting)} awaiting stock
                       </span>
                     )}
                   </span>

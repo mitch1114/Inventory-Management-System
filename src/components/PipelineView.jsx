@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS } from "../lib/constants";
-import { computeInventory, advanceStage, resolveBackorders } from "../lib/inventory";
+import { computeInventory, advanceStage, resolveBackorders, preOrderCoverage, preOrderTip } from "../lib/inventory";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
@@ -79,6 +79,39 @@ export default function PipelineView({ data, setData }) {
   // belong in the pick queue. Each card shows whether its stock has arrived.
   const isPreHold = (o) => o.fulfillmentStage === "confirmed" && o.type === "preorder";
   const preHoldOrders = useMemo(() => data.salesOrders.filter(isPreHold), [data.salesOrders]);
+  // On-hand stock reserved for each pre-order line (earliest ship window first)
+  const preCoverage = useMemo(
+    () => preOrderCoverage(data.products, data.salesOrders).byLine,
+    [data.products, data.salesOrders],
+  );
+  const preStatus = (o) => {
+    let ordered = 0;
+    let short = 0;
+    let reserved = 0;
+    o.lines.forEach((l, i) => {
+      const covered = preCoverage[`${o.id}:${i}`] || 0;
+      ordered += l.qty;
+      reserved += covered;
+      short += Math.max(0, (l.qtyBackordered || 0) - covered);
+    });
+    return { ordered, short, reserved };
+  };
+  const [preOpen, setPreOpen] = useState(() => {
+    try {
+      return localStorage.getItem("acc_preorders_open") === "1";
+    } catch (_) {
+      return false;
+    }
+  });
+  const togglePreOpen = () =>
+    setPreOpen((v) => {
+      try {
+        localStorage.setItem("acc_preorders_open", v ? "0" : "1");
+      } catch (_) {}
+      return !v;
+    });
+  const [preFilter, setPreFilter] = useState("all"); // all | ready | short
+  const [preSearch, setPreSearch] = useState("");
   const stageOrders = useMemo(() => {
     const m = {};
     STAGES.forEach((s) => {
@@ -283,11 +316,16 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       shippingCost:
         o.shipment && o.shipment.shippingCost != null ? String(o.shipment.shippingCost) : "",
     });
-    // Pre-fill pick quantities with current qtyFilled values
+    // Pre-fill pick quantities with current qtyFilled values. Held pre-orders
+    // also get the on-hand stock reserved for them, so picking converts the
+    // reservation into real fills.
+    const isHeldPre = o.type === "preorder" && o.fulfillmentStage === "confirmed";
     setPickQtys(
-      o.lines.map((l) => ({
+      o.lines.map((l, i) => ({
         productId: l.productId,
-        qtyFilled: l.qtyFilled != null ? l.qtyFilled : l.qty,
+        qtyFilled:
+          (l.qtyFilled != null ? l.qtyFilled : l.qty) +
+          (isHeldPre ? preCoverage[`${o.id}:${i}`] || 0 : 0),
       })),
     );
     // Reset scanner state
@@ -731,137 +769,200 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
         </span>
       </div>
 
-      {/* Pre-orders awaiting stock -- held out of the pick queue */}
-      {preHoldOrders.length > 0 && (
-        <div
-          style={{
-            background: "#FAF5FF",
-            border: "1px solid #DDD6FE",
-            borderRadius: 12,
-            padding: "12px 14px",
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#7C3AED" }} />
-            <span style={{ fontWeight: 700, color: "#6D28D9", fontSize: 13 }}>
-              Pre-Orders ({preHoldOrders.length})
-            </span>
-            <span style={{ fontSize: 11, color: "#7C3AED" }}>
-              Held out of the pick queue. Received stock auto-fills them; pick when the ship
-              window arrives.
-            </span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", gap: 8 }}>
-            {preHoldOrders.map((o) => {
-              const orderedUnits = o.lines.reduce((s, l) => s + l.qty, 0);
-              const boUnits = o.lines.reduce((s, l) => s + (l.qtyBackordered || 0), 0);
-              const total = o.lines.reduce((s, l) => s + l.qty * l.price, 0);
-              return (
-                <div
-                  key={o.id}
-                  style={{
-                    background: "#FFFFFF",
-                    border: "1px solid #DDD6FE",
-                    borderRadius: 10,
-                    padding: "10px 12px",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 800,
-                        color: "#6D28D9",
-                        fontFamily: "monospace",
-                        cursor: "pointer",
-                        textDecoration: "underline",
-                        textDecorationColor: "#DDD6FE",
-                        textUnderlineOffset: 2,
-                      }}
-                      onClick={() => setDetailOrder(o)}
-                    >
-                      {o.orderNum}
-                    </span>
-                    <Badge status="preorder" label="Pre-order" />
-                  </div>
-                  <div style={{ fontSize: 13, color: "#0F172A", fontWeight: 600 }}>{o.customer}</div>
-                  {o.dealerPORef && (
-                    <div style={{ fontSize: 11, fontFamily: "monospace", color: "#64748B" }}>
-                      {o.dealerPORef}
-                    </div>
-                  )}
-                  <div style={{ fontSize: 11, color: "#64748B", margin: "4px 0 6px" }}>
-                    {fmtDate(o.date)} &middot; {orderedUnits} units &middot; {fmt(total)}
-                  </div>
-                  <div
-                    style={{
-                      background: boUnits > 0 ? "#FFF7ED" : "#F0FDF4",
-                      border: `1px solid ${boUnits > 0 ? "#FED7AA" : "#BBF7D0"}`,
-                      borderRadius: 6,
-                      padding: "3px 8px",
-                      marginBottom: 6,
-                      fontSize: 11,
-                      color: boUnits > 0 ? "#9A3412" : "#15803D",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {boUnits > 0
-                      ? `${fmtNum(boUnits)} of ${fmtNum(orderedUnits)} units awaiting stock`
-                      : "All units in stock — ready to pick"}
-                  </div>
-                  {o.requestedShipDate && (
-                    <div style={{ fontSize: 11, color: "#64748B", marginBottom: 6 }}>
-                      Requested ship: {fmtDate(o.requestedShipDate)}
-                    </div>
-                  )}
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      onClick={() => setEditOrder(o)}
-                      style={{
-                        flex: 1,
-                        padding: "5px",
-                        borderRadius: 7,
-                        border: "1px solid #E2E8F0",
-                        background: "#F8FAFC",
-                        color: "#64748B",
-                        fontWeight: 700,
-                        fontSize: 11,
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => openAdvance(o)}
-                      title={
-                        boUnits > 0
-                          ? "Force into picking now (partial fills allowed)"
-                          : "Move to Picked & Packed"
-                      }
-                      style={{
-                        flex: 1,
-                        padding: "5px",
-                        borderRadius: 7,
-                        border: `1px solid ${boUnits > 0 ? "#DDD6FE" : "#7C3AED"}`,
-                        background: boUnits > 0 ? "#FAF5FF" : "#7C3AED",
-                        color: boUnits > 0 ? "#7C3AED" : "#FFFFFF",
-                        fontWeight: 700,
-                        fontSize: 11,
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      {boUnits > 0 ? "Pick Anyway" : "Pick Now →"}
-                    </button>
-                  </div>
+      {/* Pre-orders -- held out of the pick queue; collapsible */}
+      {preHoldOrders.length > 0 && (() => {
+        const rows = preHoldOrders
+          .map((o) => ({ o, st: preStatus(o), total: o.lines.reduce((s, l) => s + l.qty * l.price, 0) }))
+          .sort(
+            (a, b) =>
+              (a.o.requestedShipDate || "9999").localeCompare(b.o.requestedShipDate || "9999") ||
+              (a.o.orderNum || "").localeCompare(b.o.orderNum || ""),
+          );
+        const readyCount = rows.filter((r) => r.st.short === 0).length;
+        const totUnits = rows.reduce((s, r) => s + r.st.ordered, 0);
+        const totShort = rows.reduce((s, r) => s + r.st.short, 0);
+        const totValue = rows.reduce((s, r) => s + r.total, 0);
+        const q = preSearch.trim().toLowerCase();
+        const shown = rows.filter(
+          (r) =>
+            (preFilter === "all" || (preFilter === "ready" ? r.st.short === 0 : r.st.short > 0)) &&
+            (!q ||
+              [r.o.orderNum, r.o.customer, r.o.dealerPORef].some((v) =>
+                String(v || "").toLowerCase().includes(q),
+              )),
+        );
+        const chip = (id, label) => (
+          <button
+            key={id}
+            onClick={() => setPreFilter(id)}
+            style={{
+              padding: "4px 10px",
+              borderRadius: 20,
+              border: `1px solid ${preFilter === id ? "#7C3AED" : "#DDD6FE"}`,
+              background: preFilter === id ? "#7C3AED" : "#FFFFFF",
+              color: preFilter === id ? "#FFFFFF" : "#6D28D9",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            {label}
+          </button>
+        );
+        const th = { padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#7C3AED", textTransform: "uppercase", letterSpacing: "0.05em", position: "sticky", top: 0, background: "#F5F3FF" };
+        const td = { padding: "7px 10px", fontSize: 12, color: "#334155", borderTop: "1px solid #EDE9FE" };
+        return (
+          <div
+            style={{
+              background: "#FAF5FF",
+              border: "1px solid #DDD6FE",
+              borderRadius: 12,
+              padding: "10px 14px",
+              marginBottom: 16,
+            }}
+          >
+            <button
+              onClick={togglePreOpen}
+              aria-expanded={preOpen}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                width: "100%",
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                textAlign: "left",
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={{ color: "#7C3AED", fontSize: 12, width: 10 }}>{preOpen ? "▾" : "▸"}</span>
+              <span style={{ fontWeight: 800, color: "#6D28D9", fontSize: 13 }}>
+                Pre-Orders ({rows.length})
+              </span>
+              <span style={{ fontSize: 12, color: "#6D28D9" }}>
+                {fmtNum(totUnits)} units &middot; {fmt(totValue)}
+              </span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#15803D", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 20, padding: "1px 8px" }}>
+                {readyCount} fully in stock
+              </span>
+              {rows.length - readyCount > 0 && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#9A3412", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 20, padding: "1px 8px" }}>
+                  {rows.length - readyCount} awaiting stock ({fmtNum(totShort)} units)
+                </span>
+              )}
+              <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#7C3AED" }}>
+                {preOpen ? "Hide" : "Show"}
+              </span>
+            </button>
+            {preOpen && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                  {chip("all", `All (${rows.length})`)}
+                  {chip("ready", `Fully in stock (${readyCount})`)}
+                  {chip("short", `Awaiting stock (${rows.length - readyCount})`)}
+                  <input
+                    value={preSearch}
+                    onChange={(e) => setPreSearch(e.target.value)}
+                    placeholder="Search customer, SO#, PO#..."
+                    style={{ ...IS, width: 220, padding: "5px 10px", fontSize: 12, marginLeft: "auto" }}
+                  />
                 </div>
-              );
-            })}
+                <div style={{ fontSize: 11, color: "#7C3AED", marginBottom: 6 }}>
+                  Held out of the pick queue. In-stock units are reserved for these orders (earliest
+                  ship window first); the rest auto-fill on receiving. Pick when the ship window arrives.
+                </div>
+                <div style={{ maxHeight: 420, overflow: "auto", background: "#FFFFFF", border: "1px solid #DDD6FE", borderRadius: 8 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+                    <thead>
+                      <tr>
+                        {["Order", "Customer", "Ship Window", "Units", "Value", "Stock", ""].map((h) => (
+                          <th key={h} style={th}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shown.map(({ o, st, total }) => {
+                        const ready = st.short === 0;
+                        return (
+                          <tr key={o.id}>
+                            <td style={td}>
+                              <span
+                                onClick={() => setDetailOrder(o)}
+                                style={{ fontFamily: "monospace", fontWeight: 800, color: "#6D28D9", cursor: "pointer", textDecoration: "underline", textDecorationColor: "#DDD6FE" }}
+                              >
+                                {o.orderNum}
+                              </span>
+                              {o.dealerPORef && (
+                                <div style={{ fontSize: 10, fontFamily: "monospace", color: "#94A3B8" }}>{o.dealerPORef}</div>
+                              )}
+                            </td>
+                            <td style={{ ...td, fontWeight: 600, color: "#0F172A" }}>{o.customer}</td>
+                            <td style={td}>{o.requestedShipDate ? fmtDate(o.requestedShipDate) : "--"}</td>
+                            <td style={td}>{fmtNum(st.ordered)}</td>
+                            <td style={td}>{fmt(total)}</td>
+                            <td style={td}>
+                              <span
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  color: ready ? "#15803D" : "#9A3412",
+                                  background: ready ? "#F0FDF4" : "#FFF7ED",
+                                  border: `1px solid ${ready ? "#BBF7D0" : "#FED7AA"}`,
+                                  borderRadius: 6,
+                                  padding: "2px 8px",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {ready ? "All in stock" : `${fmtNum(st.short)} of ${fmtNum(st.ordered)} awaiting stock`}
+                              </span>
+                            </td>
+                            <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
+                              <button
+                                onClick={() => setEditOrder(o)}
+                                style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E2E8F0", background: "#F8FAFC", color: "#64748B", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: "inherit", marginRight: 6 }}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => openAdvance(o)}
+                                title={ready ? "Move to Picked & Packed" : "Force into picking now (partial fills allowed)"}
+                                style={{
+                                  padding: "4px 10px",
+                                  borderRadius: 6,
+                                  border: `1px solid ${ready ? "#7C3AED" : "#DDD6FE"}`,
+                                  background: ready ? "#7C3AED" : "#FAF5FF",
+                                  color: ready ? "#FFFFFF" : "#7C3AED",
+                                  fontWeight: 700,
+                                  fontSize: 11,
+                                  cursor: "pointer",
+                                  fontFamily: "inherit",
+                                }}
+                              >
+                                {ready ? "Pick Now →" : "Pick Anyway"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {shown.length === 0 && (
+                        <tr>
+                          <td colSpan={7} style={{ ...td, textAlign: "center", color: "#94A3B8", padding: 16 }}>
+                            No pre-orders match.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Kanban columns */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
@@ -1186,7 +1287,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560, marginTop: 12 }}>
           <thead>
             <tr>
-              {["SKU", "Product", "On Hand", "Locked", "Backordered", "Pre-Orders", "Available"].map((h) => (
+              {["SKU", "Product", "On Hand", "Locked", "Backordered", "Pre-Order Reserved", "Available"].map((h) => (
                 <th
                   key={h}
                   style={{
@@ -1239,16 +1340,12 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                   style={{
                     padding: "8px 12px",
                     fontSize: 13,
-                    color: p.preOrderUnits > 0 ? "#7C3AED" : "#64748B",
-                    fontWeight: p.preOrderUnits > 0 ? 700 : 400,
+                    color: p.preOrderReserved > 0 ? "#7C3AED" : "#64748B",
+                    fontWeight: p.preOrderReserved > 0 ? 700 : 400,
                   }}
-                  title={
-                    p.preOrderUnits > 0
-                      ? `${fmtNum(p.preOrderLocked)} in stock (locked) · ${fmtNum(p.preOrderAwaiting)} awaiting stock`
-                      : undefined
-                  }
+                  title={p.preOrderUnits > 0 ? preOrderTip(p) : undefined}
                 >
-                  {p.preOrderUnits > 0 ? fmtNum(p.preOrderUnits) : "--"}
+                  {p.preOrderReserved > 0 ? `-${fmtNum(p.preOrderReserved)}` : "--"}
                 </td>
                 <td style={{ padding: "8px 12px" }}>
                   <span

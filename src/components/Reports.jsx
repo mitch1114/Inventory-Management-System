@@ -11,27 +11,64 @@ import {
   Cell,
 } from "recharts";
 import { STAGES, STAGE_LABEL, LOCKING } from "../lib/constants";
-import { computeInventory } from "../lib/inventory";
+import { computeInventory, preOrderCoverage } from "../lib/inventory";
 import { historyRevenue } from "../lib/historyImport";
+import {
+  buildSalesFacts,
+  periodMetrics,
+  groupMetrics,
+  monthlyForYear,
+  compareRange,
+  pctChange,
+  addMonths,
+  CHANNEL_LABELS,
+} from "../lib/salesMetrics";
 import { fmt, fmtNum, fmtDate, toCSV, dlCSV } from "../lib/utils";
 import { Badge, Table, TR, TD, SS, BS } from "./ui";
 
 const PIE_COLORS = ["#10B981", "#EAB308", "#EF4444"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // Filled quantity basis: what actually went out the door on a line
 const filledQty = (l) => (l.qtyFilled != null ? l.qtyFilled : l.qty);
 
-const CC = ({ title, children }) => (
+// Compact currency for chart axes ($12.5k)
+const fmtK = (v) =>
+  Math.abs(v) >= 1000000
+    ? `$${(v / 1000000).toFixed(1)}M`
+    : Math.abs(v) >= 1000
+      ? `$${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}k`
+      : `$${Math.round(v)}`;
+
+const tooltipStyle = {
+  background: "#FFFFFF",
+  border: "1px solid #CBD5E1",
+  borderRadius: 8,
+  color: "#0F172A",
+};
+
+const CC = ({ title, right, children }) => (
   <div
     style={{
       background: "#FFFFFF",
       border: "1px solid #E2E8F0",
       borderRadius: 12,
       padding: 20,
+      minWidth: 0,
     }}
   >
-    <div style={{ fontWeight: 700, color: "#0F172A", marginBottom: 16, fontSize: 14 }}>
-      {title}
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+        flexWrap: "wrap",
+        marginBottom: 16,
+      }}
+    >
+      <div style={{ fontWeight: 700, color: "#0F172A", fontSize: 14 }}>{title}</div>
+      {right}
     </div>
     {children}
   </div>
@@ -64,7 +101,100 @@ const MetricCard = ({ value, label, sub, accent }) => (
   </div>
 );
 
-// --- Customer report timeframes (all computed in LOCAL time) -------------------
+// Green up / red down change pill comparing cur with prev. No baseline:
+// "new" when there's current activity, "--" when there's none either.
+const Delta = ({ cur, prev, small }) => {
+  const fs = small ? 10 : 11;
+  if (cur == null || prev == null) return <span style={{ fontSize: fs, color: "#94A3B8", fontWeight: 600 }}>--</span>;
+  const pct = pctChange(cur, prev);
+  if (pct == null)
+    return cur > 0 ? (
+      <span style={{ fontSize: fs, fontWeight: 800, color: "#1D4ED8", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 20, padding: small ? "0 6px" : "1px 7px" }}>
+        new
+      </span>
+    ) : (
+      <span style={{ fontSize: fs, color: "#94A3B8", fontWeight: 600 }}>--</span>
+    );
+  const up = pct >= 0;
+  return (
+    <span
+      style={{
+        fontSize: fs,
+        fontWeight: 800,
+        color: up ? "#15803D" : "#B91C1C",
+        background: up ? "#F0FDF4" : "#FEF2F2",
+        border: `1px solid ${up ? "#BBF7D0" : "#FECACA"}`,
+        borderRadius: 20,
+        padding: small ? "0 6px" : "1px 7px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {up ? "▲" : "▼"} {Math.abs(pct * 100).toFixed(1)}%
+    </span>
+  );
+};
+
+// Headline metric with its comparison-period value and change
+const CompareCard = ({ label, sub, accent, value, prev, format, compareOn }) => (
+  <div
+    style={{
+      background: "#FFFFFF",
+      border: "1px solid #E2E8F0",
+      borderRadius: 12,
+      padding: "13px 15px",
+      borderTop: `3px solid ${accent}`,
+    }}
+  >
+    <div
+      style={{
+        fontSize: 10,
+        color: "#64748B",
+        textTransform: "uppercase",
+        letterSpacing: "0.06em",
+        fontWeight: 700,
+      }}
+    >
+      {label}
+    </div>
+    <div style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", marginTop: 4 }}>
+      {value == null ? "--" : format(value)}
+    </div>
+    {compareOn && (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+        <Delta cur={value} prev={prev} />
+        <span style={{ fontSize: 11, color: "#94A3B8" }}>
+          vs {prev == null ? "--" : format(prev)}
+        </span>
+      </div>
+    )}
+    {sub && <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 4 }}>{sub}</div>}
+  </div>
+);
+
+const Toggle = ({ value, options, onChange }) => (
+  <div style={{ display: "inline-flex", border: "1px solid #E2E8F0", borderRadius: 8, overflow: "hidden" }}>
+    {options.map(([id, label]) => (
+      <button
+        key={id}
+        onClick={() => onChange(id)}
+        style={{
+          padding: "4px 10px",
+          border: "none",
+          background: value === id ? "#7C3AED" : "#FFFFFF",
+          color: value === id ? "#FFFFFF" : "#64748B",
+          fontSize: 11,
+          fontWeight: 700,
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+      >
+        {label}
+      </button>
+    ))}
+  </div>
+);
+
+// --- Report timeframes (all computed in LOCAL time) -----------------------------
 const TIMEFRAMES = [
   { id: "today", label: "Today" },
   { id: "yesterday", label: "Yesterday" },
@@ -76,6 +206,12 @@ const TIMEFRAMES = [
   { id: "lastQuarter", label: "Last Quarter" },
   { id: "ytd", label: "YTD" },
   { id: "allTime", label: "All Time (incl. history)" },
+];
+
+const COMPARE_MODES = [
+  { id: "prev", label: "Previous period" },
+  { id: "lastYear", label: "Same period last year" },
+  { id: "none", label: "No comparison" },
 ];
 
 const localDateStr = (d) =>
@@ -136,128 +272,244 @@ function timeframeRange(id) {
   return [localDateStr(start), localDateStr(end)];
 }
 
+const fmtRange = ([s, e]) => {
+  const f = (d, withYear) =>
+    new Date(d + "T00:00:00").toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      ...(withYear ? { year: "numeric" } : {}),
+    });
+  if (s === e) return f(s, true);
+  return `${f(s, s.slice(0, 4) !== e.slice(0, 4))} – ${f(e, true)}`;
+};
+
 export default function Reports({ data }) {
   const { products, salesOrders, customers } = data;
   const historicalSales = data.historicalSales || [];
   const [custSel, setCustSel] = useState("all");
   const [timeframe, setTimeframe] = useState("thisMonth");
+  const [compareMode, setCompareMode] = useState("prev");
+  const [prodBasis, setProdBasis] = useState("invoiced"); // invoiced | ordered
+  const [prodMetric, setProdMetric] = useState("rev"); // rev | units
+  const [yoyMetric, setYoyMetric] = useState("topLine"); // topLine | invoiced
+  const [showAllCust, setShowAllCust] = useState(false);
+
   // Selected reporting period -- scopes the revenue metrics, charts, and the
   // customer report. Inventory/pipeline cards show CURRENT state (unscoped).
   const [rangeStart, rangeEnd] = useMemo(() => timeframeRange(timeframe), [timeframe]);
-  const inRange = (o) => (o.date || "") >= rangeStart && (o.date || "") <= rangeEnd;
-  const cp = useMemo(
-    () => computeInventory(products, salesOrders),
-    [products, salesOrders],
+  const inRange = (d) => (d || "") >= rangeStart && (d || "") <= rangeEnd;
+  // Comparisons run on the period clipped to today, so a partial month is
+  // compared with the same days of the comparison month.
+  const today = localDateStr(new Date());
+  const curRange = useMemo(
+    () => [rangeStart, rangeEnd > today ? today : rangeEnd],
+    [rangeStart, rangeEnd, today],
   );
-  const shipped = useMemo(
-    () =>
-      salesOrders.filter(
-        (o) =>
-          o.fulfillmentStage === "shipped" &&
-          (o.date || "") >= rangeStart &&
-          (o.date || "") <= rangeEnd,
-      ),
-    [salesOrders, rangeStart, rangeEnd],
+  const cmpRange = useMemo(
+    () => compareRange(timeframe, compareMode, curRange),
+    [timeframe, compareMode, curRange],
   );
-  // Shipped revenue: filled qty x price (partially-filled orders count what shipped)
-  const revenue = useMemo(
-    () =>
-      shipped.reduce(
-        (s, o) => s + o.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0),
-        0,
-      ),
-    [shipped],
+  const compareOn = !!cmpRange;
+
+  const cp = useMemo(() => computeInventory(products, salesOrders), [products, salesOrders]);
+  const prodMap = useMemo(() => Object.fromEntries(products.map((p) => [p.id, p])), [products]);
+
+  // --- Revenue (live orders + imported history, see lib/salesMetrics) ----------
+  const facts = useMemo(
+    () => buildSalesFacts(salesOrders, historicalSales, customers),
+    [salesOrders, historicalSales, customers],
   );
-  // Top line: everything ordered (non-cancelled) in the period
-  const allRevenue = useMemo(
-    () =>
-      salesOrders
-        .filter((o) => o.fulfillmentStage !== "cancelled" && inRange(o))
-        .reduce((s, o) => s + o.lines.reduce((ls, l) => ls + l.qty * l.price, 0), 0),
-    [salesOrders, rangeStart, rangeEnd],
+  const cur = useMemo(() => periodMetrics(facts, curRange), [facts, curRange]);
+  const prev = useMemo(() => (cmpRange ? periodMetrics(facts, cmpRange) : null), [facts, cmpRange]);
+
+  // Live orders invoiced (shipped) in a range -- dated by ship date, the
+  // invoice date. Product/COGS figures need SKU lines, so they're live-only.
+  const shipDateOf = (o) => (o.shipment && o.shipment.shipDate) || o.date || "";
+  const shippedIn = (range) =>
+    salesOrders.filter(
+      (o) =>
+        o.fulfillmentStage === "shipped" && shipDateOf(o) >= range[0] && shipDateOf(o) <= range[1],
+    );
+  const shipped = useMemo(() => shippedIn(curRange), [salesOrders, curRange]);
+  const liveInvoiced = shipped.reduce(
+    (s, o) => s + o.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0),
+    0,
   );
-  // COGS: filled qty x OUR true supplier cost (product.costPrice)
-  const cogs = useMemo(
-    () =>
-      shipped.reduce(
-        (s, o) =>
-          s +
-          o.lines.reduce((ls, l) => {
-            const p = products.find((p) => p.id === l.productId);
-            // Landed cost (freight/duty/fees included) when a receipt has set
-            // it; supplier cost otherwise.
-            return ls + filledQty(l) * ((p && (p.landedCost || p.costPrice)) || 0);
-          }, 0),
-        0,
-      ),
-    [shipped, products],
-  );
-  const pipelineVal = salesOrders
-    .filter((o) => LOCKING.has(o.fulfillmentStage))
-    .reduce(
+  // COGS: filled qty x landed cost (supplier cost when no landed cost yet)
+  const cogsOf = (orders) =>
+    orders.reduce(
       (s, o) =>
         s +
-        o.lines.reduce(
-          (ls, l) => ls + (l.qtyFilled != null ? l.qtyFilled : l.qty) * l.price,
-          0,
-        ),
+        o.lines.reduce((ls, l) => {
+          const p = prodMap[l.productId];
+          return ls + filledQty(l) * ((p && (p.landedCost || p.costPrice)) || 0);
+        }, 0),
       0,
     );
-  const boVal = salesOrders
-    .filter((o) => LOCKING.has(o.fulfillmentStage))
-    .reduce(
-      (s, o) =>
-        s +
-        o.lines.reduce(
-          (ls, l) => ls + (l.qtyBackordered != null ? l.qtyBackordered : 0) * l.price,
-          0,
-        ),
-      0,
-    );
-  // Monthly demand (ordered value) vs invoiced (shipped value) -- side by
-  // side so order intake and outbound revenue can be compared.
+  const cogs = cogsOf(shipped);
+  const gp = liveInvoiced - cogs;
+  const prevGp = useMemo(() => {
+    if (!cmpRange) return null;
+    const ords = shippedIn(cmpRange);
+    if (ords.length === 0) return null;
+    const rev = ords.reduce((s, o) => s + o.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0), 0);
+    return rev - cogsOf(ords);
+  }, [salesOrders, cmpRange, prodMap]);
+
+  const openOrders = salesOrders.filter((o) => LOCKING.has(o.fulfillmentStage));
+  const pipelineVal = openOrders.reduce(
+    (s, o) => s + o.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0),
+    0,
+  );
+  // Backorder value = units owed that no stock covers (pre-order units with
+  // reserved on-hand stock aren't short)
+  const preCov = useMemo(() => preOrderCoverage(products, salesOrders).byLine, [products, salesOrders]);
+  const boVal = openOrders.reduce(
+    (s, o) =>
+      s +
+      o.lines.reduce(
+        (ls, l, i) =>
+          ls +
+          Math.max(0, (l.qtyBackordered != null ? l.qtyBackordered : 0) - (preCov[`${o.id}:${i}`] || 0)) *
+            l.price,
+        0,
+      ),
+    0,
+  );
+  // Pre-order book: confirmed-but-unshipped pre-orders at ordered value
+  const preBook = useMemo(() => {
+    const pre = openOrders.filter((o) => o.type === "preorder");
+    const windows = pre.map((o) => o.requestedShipDate).filter(Boolean).sort();
+    return {
+      count: pre.length,
+      units: pre.reduce((s, o) => s + o.lines.reduce((ls, l) => ls + l.qty, 0), 0),
+      value: pre.reduce((s, o) => s + o.lines.reduce((ls, l) => ls + l.qty * l.price, 0), 0),
+      nextWindow: windows[0] || "",
+    };
+  }, [salesOrders]);
+
+  // Monthly top line vs invoiced within the selected period
   const byMonth = useMemo(() => {
     const m = {};
     const bucket = (mo) => (m[mo] = m[mo] || { month: mo, ordered: 0, invoiced: 0 });
-    salesOrders
-      .filter((o) => o.fulfillmentStage !== "cancelled" && inRange(o))
-      .forEach((o) => {
-        const mo = (o.date || "").slice(0, 7);
-        if (!mo) return;
-        bucket(mo).ordered += o.lines.reduce((s, l) => s + l.qty * l.price, 0);
-      });
-    shipped.forEach((o) => {
-      const mo = (o.date || "").slice(0, 7);
-      if (!mo) return;
-      bucket(mo).invoiced += o.lines.reduce((s, l) => s + filledQty(l) * l.price, 0);
+    facts.forEach((f) => {
+      if (inRange(f.orderDate)) bucket(f.orderDate.slice(0, 7)).ordered += f.ordered;
+      if (f.invoiced != null && inRange(f.shipDate)) bucket(f.shipDate.slice(0, 7)).invoiced += f.invoiced;
     });
     return Object.values(m)
       .sort((a, b) => a.month.localeCompare(b.month))
       .map((r) => ({ ...r, ordered: +r.ordered.toFixed(2), invoiced: +r.invoiced.toFixed(2) }));
-  }, [salesOrders, shipped, rangeStart, rangeEnd]);
+  }, [facts, rangeStart, rangeEnd]);
+
+  // Year-over-year by month (current calendar year vs prior year)
+  const thisYear = Number(today.slice(0, 4));
+  const yoy = useMemo(() => {
+    const a = monthlyForYear(facts, thisYear);
+    const b = monthlyForYear(facts, thisYear - 1);
+    return a.map((r, i) => ({
+      month: MONTHS[i],
+      cur: +r[yoyMetric].toFixed(2),
+      prior: +b[i][yoyMetric].toFixed(2),
+    }));
+  }, [facts, thisYear, yoyMetric]);
+  const ytdCur = useMemo(() => periodMetrics(facts, [`${thisYear}-01-01`, today]), [facts, thisYear, today]);
+  const ytdPrior = useMemo(
+    () => periodMetrics(facts, [`${thisYear - 1}-01-01`, addMonths(today, -12)]),
+    [facts, thisYear, today],
+  );
+
+  // Top products (live orders -- history has no SKU detail)
   const topProds = useMemo(() => {
-    const m = {};
-    shipped.forEach((o) =>
-      o.lines.forEach((l) => {
-        m[l.productId] = (m[l.productId] || 0) + filledQty(l) * l.price;
-      }),
-    );
-    return Object.entries(m)
-      .map(([id, rev]) => {
-        const found = products.find((p) => p.id === id);
-        return { name: found ? found.name : id, rev: +rev.toFixed(2) };
+    const agg = (range) => {
+      const m = {};
+      const orders =
+        prodBasis === "invoiced"
+          ? shippedIn(range)
+          : salesOrders.filter(
+              (o) => o.fulfillmentStage !== "cancelled" && (o.date || "") >= range[0] && (o.date || "") <= range[1],
+            );
+      orders.forEach((o) =>
+        o.lines.forEach((l) => {
+          const q = prodBasis === "invoiced" ? filledQty(l) : l.qty;
+          if (q <= 0) return;
+          const r = (m[l.productId] = m[l.productId] || { rev: 0, units: 0 });
+          r.rev += q * (l.price || 0);
+          r.units += q;
+        }),
+      );
+      return m;
+    };
+    const now = agg(curRange);
+    const before = cmpRange ? agg(cmpRange) : {};
+    const rows = Object.entries(now).map(([id, r]) => {
+      const p = prodMap[id];
+      const b = before[id] || { rev: 0, units: 0 };
+      return {
+        id,
+        sku: p ? p.sku : "",
+        name: p ? p.name : "(deleted product)",
+        rev: r.rev,
+        units: r.units,
+        prevVal: prodMetric === "rev" ? b.rev : b.units,
+      };
+    });
+    const key = prodMetric === "rev" ? "rev" : "units";
+    const total = rows.reduce((s, r) => s + r[key], 0);
+    return {
+      total,
+      rows: rows
+        .sort((a, b) => b[key] - a[key])
+        .slice(0, 10)
+        .map((r) => ({ ...r, val: r[key], share: total > 0 ? r[key] / total : 0 })),
+    };
+  }, [salesOrders, curRange, cmpRange, prodBasis, prodMetric, prodMap]);
+
+  // Top customers + channel mix (live + history)
+  const custAgg = useMemo(() => {
+    const now = groupMetrics(facts, curRange, (f) => f.customer || "(unknown)");
+    const before = cmpRange ? groupMetrics(facts, cmpRange, (f) => f.customer || "(unknown)") : {};
+    const chan = {};
+    facts.forEach((f) => {
+      if (f.customer && !chan[f.customer]) chan[f.customer] = f.channel;
+    });
+    return Object.values(now)
+      .map((r) => ({
+        ...r,
+        channel: chan[r.key],
+        prevTop: before[r.key] ? before[r.key].topLine : 0,
+        prevInv: before[r.key] ? before[r.key].invoiced : 0,
+      }))
+      .sort((a, b) => b.topLine - a.topLine || b.invoiced - a.invoiced);
+  }, [facts, curRange, cmpRange]);
+
+  const channelAgg = useMemo(() => {
+    const now = groupMetrics(facts, curRange, (f) => f.channel);
+    const before = cmpRange ? groupMetrics(facts, cmpRange, (f) => f.channel) : {};
+    const totTop = Object.values(now).reduce((s, r) => s + r.topLine, 0);
+    const totInv = Object.values(now).reduce((s, r) => s + r.invoiced, 0);
+    return Object.keys(CHANNEL_LABELS)
+      .map((k) => {
+        const r = now[k] || { topLine: 0, invoiced: 0, orders: 0 };
+        const b = before[k] || { topLine: 0, invoiced: 0 };
+        return {
+          key: k,
+          label: CHANNEL_LABELS[k],
+          ...r,
+          topShare: totTop > 0 ? r.topLine / totTop : 0,
+          invShare: totInv > 0 ? r.invoiced / totInv : 0,
+          prevTop: b.topLine,
+          prevInv: b.invoiced,
+        };
       })
-      .sort((a, b) => b.rev - a.rev)
-      .slice(0, 6);
-  }, [shipped, products]);
+      .filter((r) => r.topLine > 0 || r.invoiced > 0 || r.prevTop > 0 || r.prevInv > 0);
+  }, [facts, curRange, cmpRange]);
+
   // --- Imported sales history aggregates -----------------------------------------
   const histTotals = useMemo(() => {
-    let po = 0;
     let invoiced = 0;
     let poWithInvoice = 0;
     let rev = 0;
     historicalSales.forEach((h) => {
-      po += h.poAmount || 0;
       rev += historyRevenue(h);
       if (h.invoiceAmount != null) {
         invoiced += h.invoiceAmount;
@@ -271,29 +523,20 @@ export default function Reports({ data }) {
     };
   }, [historicalSales]);
 
-  // Combined revenue by year: live shipped orders + imported history.
-  // Deliberately ALL-TIME (not scoped to the selected period) -- this chart
-  // exists to show the multi-year picture.
+  // Invoiced revenue by year: live system + imported history (all-time)
   const byYear = useMemo(() => {
     const m = {};
-    salesOrders
-      .filter((o) => o.fulfillmentStage === "shipped")
-      .forEach((o) => {
-        const y = (o.date || "").slice(0, 4);
-        if (!y) return;
-        m[y] = m[y] || { year: y, live: 0, history: 0 };
-        m[y].live += o.lines.reduce((s, l) => s + filledQty(l) * l.price, 0);
-      });
-    historicalSales.forEach((h) => {
-      const y = (h.date || "").slice(0, 4);
+    facts.forEach((f) => {
+      if (f.invoiced == null) return;
+      const y = (f.shipDate || "").slice(0, 4);
       if (!y) return;
       m[y] = m[y] || { year: y, live: 0, history: 0 };
-      m[y].history += historyRevenue(h);
+      m[y][f.source === "hist" ? "history" : "live"] += f.invoiced;
     });
     return Object.values(m)
       .sort((a, b) => a.year.localeCompare(b.year))
       .map((r) => ({ ...r, live: +r.live.toFixed(2), history: +r.history.toFixed(2) }));
-  }, [salesOrders, historicalSales]);
+  }, [facts]);
 
   const stockPie = [
     { name: "Available", value: cp.filter((p) => p.available > p.reorderPoint).length },
@@ -406,6 +649,55 @@ export default function Reports({ data }) {
     dlCSV(toCSV(rows, headers), fn);
   };
 
+  const exportComparisonCSV = () => {
+    const pct = (a, b) => {
+      const v = pctChange(a, b);
+      return v == null ? "" : (v * 100).toFixed(1) + "%";
+    };
+    const rows = [
+      ["Top Line Revenue", cur.topLine, prev && prev.topLine],
+      ["Invoiced Revenue", cur.invoiced, prev && prev.invoiced],
+      ["Orders", cur.orders, prev && prev.orders],
+      ["Avg Order Value", cur.aov, prev && prev.aov],
+    ].map(([Metric, c, p]) => ({
+      Metric,
+      [`Current (${fmtRange(curRange)})`]: typeof c === "number" ? c.toFixed(2) : "",
+      [`Compare (${cmpRange ? fmtRange(cmpRange) : "none"})`]: typeof p === "number" ? p.toFixed(2) : "",
+      Change: typeof p === "number" ? pct(c, p) : "",
+    }));
+    const custRowsCsv = custAgg.map((r) => ({
+      Metric: `Customer: ${r.key}`,
+      [`Current (${fmtRange(curRange)})`]: r.topLine.toFixed(2),
+      [`Compare (${cmpRange ? fmtRange(cmpRange) : "none"})`]: cmpRange ? r.prevTop.toFixed(2) : "",
+      Change: cmpRange ? pct(r.topLine, r.prevTop) : "",
+    }));
+    const all = [...rows, ...custRowsCsv];
+    dlCSV(toCSV(all, Object.keys(all[0])), `sales-comparison-${timeframe}-${compareMode}.csv`);
+  };
+
+  const cmpLabel = (COMPARE_MODES.find((m) => m.id === compareMode) || {}).label;
+  const selStyle = { ...SS, width: 190 };
+  const smallTh = {
+    padding: "6px 8px",
+    fontSize: 10,
+    fontWeight: 700,
+    color: "#64748B",
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    textAlign: "right",
+    borderBottom: "1px solid #E2E8F0",
+    whiteSpace: "nowrap",
+  };
+  const smallTd = {
+    padding: "7px 8px",
+    fontSize: 12,
+    color: "#334155",
+    textAlign: "right",
+    borderBottom: "1px solid #F1F5F9",
+    whiteSpace: "nowrap",
+  };
+  const shownCust = showAllCust ? custAgg : custAgg.slice(0, 10);
+
   return (
     <div>
       <div
@@ -415,7 +707,7 @@ export default function Reports({ data }) {
           alignItems: "flex-end",
           gap: 12,
           flexWrap: "wrap",
-          marginBottom: 18,
+          marginBottom: 14,
         }}
       >
         <div>
@@ -427,22 +719,87 @@ export default function Reports({ data }) {
             cards show current state
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             Period
           </span>
-          <select
-            value={timeframe}
-            onChange={(e) => setTimeframe(e.target.value)}
-            style={{ ...SS, width: 190 }}
-          >
+          <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} style={selStyle}>
             {TIMEFRAMES.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.label}
               </option>
             ))}
           </select>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Compare to
+          </span>
+          <select
+            value={compareMode}
+            onChange={(e) => setCompareMode(e.target.value)}
+            style={selStyle}
+            disabled={timeframe === "allTime"}
+          >
+            {COMPARE_MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <button style={{ ...BS, fontSize: 12 }} onClick={exportComparisonCSV}>
+            Export CSV
+          </button>
         </div>
+      </div>
+
+      {/* Period + comparison window */}
+      <div
+        style={{
+          fontSize: 12,
+          color: "#64748B",
+          background: "#F8FAFC",
+          border: "1px solid #E2E8F0",
+          borderRadius: 8,
+          padding: "7px 12px",
+          marginBottom: 14,
+        }}
+      >
+        <strong style={{ color: "#0F172A" }}>{fmtRange(curRange)}</strong>
+        {compareOn ? (
+          <>
+            {" "}vs <strong style={{ color: "#0F172A" }}>{fmtRange(cmpRange)}</strong>{" "}
+            <span style={{ color: "#94A3B8" }}>({cmpLabel.toLowerCase()})</span>
+          </>
+        ) : timeframe === "allTime" ? (
+          <span style={{ color: "#94A3B8" }}> &middot; comparison not available for All Time</span>
+        ) : null}
+        <span style={{ color: "#94A3B8" }}>
+          {" "}&middot; Top line dated by order date, invoiced by ship date
+          {cur.usesHistory || (prev && prev.usesHistory) ? " · includes imported sales history" : ""}
+        </span>
+      </div>
+
+      {/* Headline comparison */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
+          gap: 10,
+          marginBottom: 10,
+        }}
+      >
+        <CompareCard label="Top Line Revenue" sub="customer ordered (demand)" accent="#7C3AED" value={cur.topLine} prev={prev && prev.topLine} format={fmt} compareOn={compareOn} />
+        <CompareCard label="Invoiced Revenue" sub="shipped / billed" accent="#10B981" value={cur.invoiced} prev={prev && prev.invoiced} format={fmt} compareOn={compareOn} />
+        <CompareCard label="Orders" sub={`${fmtNum(cur.invoicedOrders)} shipped in period`} accent="#3B82F6" value={cur.orders} prev={prev && prev.orders} format={fmtNum} compareOn={compareOn} />
+        <CompareCard label="Avg Order Value" sub="top line / orders" accent="#06B6D4" value={cur.orders ? cur.aov : null} prev={prev && prev.orders ? prev.aov : null} format={fmt} compareOn={compareOn} />
+        <CompareCard
+          label="Fill Rate"
+          sub="invoiced vs ordered, orders shipped in period"
+          accent="#EAB308"
+          value={cur.fillRate}
+          prev={prev && prev.fillRate}
+          format={(v) => (v * 100).toFixed(1) + "%"}
+          compareOn={compareOn}
+        />
       </div>
       <div
         style={{
@@ -452,19 +809,80 @@ export default function Reports({ data }) {
           marginBottom: 20,
         }}
       >
-        <MetricCard value={fmt(allRevenue)} label="Top Line Revenue" sub="customer ordered (demand)" accent="#7C3AED" />
-        <MetricCard value={fmt(revenue)} label="Invoiced Revenue" sub="shipped orders" accent="#10B981" />
-        <MetricCard value={fmt(cogs)} label="COGS" sub="landed cost basis" accent="#EF4444" />
-        <MetricCard value={fmt(revenue - cogs)} label="Gross Profit" accent="#7C3AED" />
+        <MetricCard value={fmt(cogs)} label="COGS" sub="live orders, landed cost basis" accent="#EF4444" />
         <MetricCard
-          value={revenue > 0 ? ((1 - cogs / revenue) * 100).toFixed(1) + "%" : "--"}
+          value={fmt(gp)}
+          label="Gross Profit"
+          sub={
+            compareOn && prevGp != null
+              ? `${pctChange(gp, prevGp) != null ? (pctChange(gp, prevGp) >= 0 ? "▲ " : "▼ ") + Math.abs(pctChange(gp, prevGp) * 100).toFixed(1) + "% " : ""}vs ${fmt(prevGp)}`
+              : "live orders"
+          }
+          accent="#7C3AED"
+        />
+        <MetricCard
+          value={liveInvoiced > 0 ? ((1 - cogs / liveInvoiced) * 100).toFixed(1) + "%" : "--"}
           label="Margin"
+          sub="live orders"
           accent="#06B6D4"
         />
-        <MetricCard value={fmt(pipelineVal)} label="Open Order Value" accent="#EAB308" />
-        <MetricCard value={fmt(boVal)} label="Backorder Value" accent="#F97316" />
+        <MetricCard value={fmt(pipelineVal)} label="Open Order Value" sub="current, filled units" accent="#EAB308" />
+        <MetricCard value={fmt(boVal)} label="Backorder Value" sub="current, units not covered by stock" accent="#F97316" />
+        <MetricCard
+          value={fmt(preBook.value)}
+          label="Pre-Order Book"
+          sub={
+            preBook.count
+              ? `${preBook.count} orders · ${fmtNum(preBook.units)} units${preBook.nextWindow ? ` · next ships ${fmtDate(preBook.nextWindow)}` : ""}`
+              : "no open pre-orders"
+          }
+          accent="#A855F7"
+        />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+
+      {/* Year over year by month */}
+      <div style={{ marginBottom: 14 }}>
+        <CC
+          title={`${thisYear} vs ${thisYear - 1} by Month`}
+          right={
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "#64748B" }}>
+                YTD {yoyMetric === "topLine" ? "top line" : "invoiced"}:{" "}
+                <strong style={{ color: "#0F172A" }}>{fmt(ytdCur[yoyMetric])}</strong> vs{" "}
+                {fmt(ytdPrior[yoyMetric])} same point last year{" "}
+                <Delta cur={ytdCur[yoyMetric]} prev={ytdPrior[yoyMetric]} />
+              </span>
+              <Toggle
+                value={yoyMetric}
+                onChange={setYoyMetric}
+                options={[
+                  ["topLine", "Top Line"],
+                  ["invoiced", "Invoiced"],
+                ]}
+              />
+            </div>
+          }
+        >
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={yoy} barGap={2} maxBarSize={28}>
+              <XAxis dataKey="month" tick={{ fill: "#64748B", fontSize: 11 }} />
+              <YAxis tick={{ fill: "#94A3B8", fontSize: 10 }} tickFormatter={fmtK} width={56} />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                formatter={(v, name) => [fmt(v), name === "cur" ? String(thisYear) : String(thisYear - 1)]}
+              />
+              <Bar dataKey="prior" fill="#CBD5E1" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="cur" fill="#7C3AED" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+          <div style={{ display: "flex", gap: 16, justifyContent: "center", fontSize: 11, color: "#64748B", marginTop: 4 }}>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#CBD5E1", borderRadius: 2, marginRight: 5 }} />{thisYear - 1}</span>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#7C3AED", borderRadius: 2, marginRight: 5 }} />{thisYear}</span>
+          </div>
+        </CC>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(420px,1fr))", gap: 14, marginBottom: 14 }}>
         <CC title="Monthly Revenue — Top Line (Ordered) vs Invoiced (Shipped)">
           {byMonth.length === 0 ? (
             <div style={{ color: "#94A3B8", fontSize: 13, textAlign: "center", padding: "30px 0" }}>
@@ -472,17 +890,12 @@ export default function Reports({ data }) {
             </div>
           ) : (
             <>
-              <ResponsiveContainer width="100%" height={185}>
-                <BarChart data={byMonth}>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={byMonth} maxBarSize={56}>
                   <XAxis dataKey="month" tick={{ fill: "#94A3B8", fontSize: 10 }} />
-                  <YAxis tick={{ fill: "#94A3B8", fontSize: 10 }} />
+                  <YAxis tick={{ fill: "#94A3B8", fontSize: 10 }} tickFormatter={fmtK} width={56} />
                   <Tooltip
-                    contentStyle={{
-                      background: "#FFFFFF",
-                      border: "1px solid #CBD5E1",
-                      borderRadius: 8,
-                      color: "#0F172A",
-                    }}
+                    contentStyle={tooltipStyle}
                     formatter={(v, name) => [fmt(v), name === "ordered" ? "Top Line (Ordered)" : "Invoiced (Shipped)"]}
                   />
                   <Bar dataKey="ordered" fill="#C4B5FD" radius={[4, 4, 0, 0]} />
@@ -496,36 +909,175 @@ export default function Reports({ data }) {
             </>
           )}
         </CC>
-        <CC title="Top Products by Revenue">
-          {topProds.length === 0 ? (
+
+        {/* Ranked list instead of a chart so long product names stay readable */}
+        <CC
+          title="Top Products"
+          right={
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <Toggle
+                value={prodBasis}
+                onChange={setProdBasis}
+                options={[
+                  ["invoiced", "Invoiced"],
+                  ["ordered", "Ordered"],
+                ]}
+              />
+              <Toggle
+                value={prodMetric}
+                onChange={setProdMetric}
+                options={[
+                  ["rev", "$"],
+                  ["units", "Units"],
+                ]}
+              />
+            </div>
+          }
+        >
+          {topProds.rows.length === 0 ? (
             <div style={{ color: "#94A3B8", fontSize: 13, textAlign: "center", padding: "30px 0" }}>
-              No data yet
+              No {prodBasis === "invoiced" ? "shipped" : ""} orders in this period
+              {prodBasis === "invoiced" ? " — try the Ordered view" : ""}
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={topProds} layout="vertical">
-                <XAxis type="number" tick={{ fill: "#94A3B8", fontSize: 10 }} />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  tick={{ fill: "#9B9BBF", fontSize: 10 }}
-                  width={130}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: "#FFFFFF",
-                    border: "1px solid #CBD5E1",
-                    borderRadius: 8,
-                    color: "#0F172A",
-                  }}
-                  formatter={(v) => fmt(v)}
-                />
-                <Bar dataKey="rev" fill="#06B6D4" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <div>
+              {topProds.rows.map((r, i) => {
+                const max = topProds.rows[0].val || 1;
+                return (
+                  <div key={r.id} style={{ padding: "6px 0", borderBottom: "1px solid #F1F5F9" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                      <span style={{ width: 18, fontSize: 11, fontWeight: 800, color: "#94A3B8" }}>{i + 1}</span>
+                      <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: "#6D28D9", whiteSpace: "nowrap" }}>
+                        {r.sku}
+                      </span>
+                      <span
+                        title={r.name}
+                        style={{ fontSize: 12, color: "#334155", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      >
+                        {r.name}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: "#0F172A", whiteSpace: "nowrap" }}>
+                        {prodMetric === "rev" ? fmt(r.val) : `${fmtNum(r.val)} units`}
+                      </span>
+                      {compareOn && (
+                        <span style={{ width: 62, textAlign: "right" }}>
+                          <Delta small cur={r.val} prev={r.prevVal} />
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, paddingLeft: 26 }}>
+                      <div style={{ flex: 1, height: 6, background: "#F1F5F9", borderRadius: 3 }}>
+                        <div style={{ width: `${(r.val / max) * 100}%`, height: 6, background: "#06B6D4", borderRadius: 3 }} />
+                      </div>
+                      <span style={{ fontSize: 10, color: "#94A3B8", width: 90, textAlign: "right" }}>
+                        {(r.share * 100).toFixed(1)}% &middot;{" "}
+                        {prodMetric === "rev" ? `${fmtNum(r.units)} u` : fmt(r.rev)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 8 }}>
+                {prodMetric === "rev" ? fmt(topProds.total) : `${fmtNum(topProds.total)} units`} total in
+                period &middot; live orders only (imported history has no SKU detail)
+              </div>
+            </div>
           )}
         </CC>
       </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(420px,1fr))", gap: 14, marginBottom: 14 }}>
+        <CC
+          title="Top Customers"
+          right={
+            custAgg.length > 10 && (
+              <button style={{ ...BS, fontSize: 11, padding: "4px 10px" }} onClick={() => setShowAllCust((v) => !v)}>
+                {showAllCust ? "Top 10" : `Show all ${custAgg.length}`}
+              </button>
+            )
+          }
+        >
+          {custAgg.length === 0 ? (
+            <div style={{ color: "#94A3B8", fontSize: 13, textAlign: "center", padding: "30px 0" }}>
+              No customer activity in this period
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto", maxHeight: showAllCust ? 480 : undefined, overflowY: showAllCust ? "auto" : undefined }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...smallTh, textAlign: "left" }}>Customer</th>
+                    <th style={smallTh}>Top Line</th>
+                    {compareOn && <th style={smallTh}>vs</th>}
+                    <th style={smallTh}>Invoiced</th>
+                    {compareOn && <th style={smallTh}>vs</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {shownCust.map((r) => (
+                    <tr key={r.key}>
+                      <td style={{ ...smallTd, textAlign: "left", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }} title={r.key}>
+                        <span style={{ fontWeight: 600, color: "#0F172A" }}>{r.key}</span>
+                        <span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6 }}>{CHANNEL_LABELS[r.channel] || ""}</span>
+                      </td>
+                      <td style={{ ...smallTd, fontWeight: 700, color: "#0F172A" }}>{fmt(r.topLine)}</td>
+                      {compareOn && (
+                        <td style={smallTd} title={`Compare period: ${fmt(r.prevTop)}`}>
+                          <Delta small cur={r.topLine} prev={r.prevTop} />
+                        </td>
+                      )}
+                      <td style={smallTd}>{fmt(r.invoiced)}</td>
+                      {compareOn && (
+                        <td style={smallTd} title={`Compare period: ${fmt(r.prevInv)}`}>
+                          <Delta small cur={r.invoiced} prev={r.prevInv} />
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CC>
+
+        <CC title="Sales by Channel">
+          {channelAgg.length === 0 ? (
+            <div style={{ color: "#94A3B8", fontSize: 13, textAlign: "center", padding: "30px 0" }}>
+              No sales in this period
+            </div>
+          ) : (
+            <div>
+              {channelAgg.map((r) => (
+                <div key={r.key} style={{ padding: "8px 0", borderBottom: "1px solid #F1F5F9" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>{r.label}</span>
+                    <span style={{ fontSize: 11, color: "#64748B" }}>{fmtNum(r.orders)} orders</span>
+                  </div>
+                  {[
+                    ["Top line", r.topLine, r.topShare, r.prevTop, "#7C3AED"],
+                    ["Invoiced", r.invoiced, r.invShare, r.prevInv, "#10B981"],
+                  ].map(([lbl, v, share, pv, col]) => (
+                    <div key={lbl} style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                      <span style={{ width: 58, fontSize: 10, color: "#64748B", fontWeight: 700, textTransform: "uppercase" }}>{lbl}</span>
+                      <div style={{ flex: 1, height: 6, background: "#F1F5F9", borderRadius: 3 }}>
+                        <div style={{ width: `${share * 100}%`, height: 6, background: col, borderRadius: 3 }} />
+                      </div>
+                      <span style={{ width: 96, textAlign: "right", fontSize: 12, fontWeight: 700, color: "#0F172A" }}>{fmt(v)}</span>
+                      <span style={{ width: 40, textAlign: "right", fontSize: 10, color: "#94A3B8" }}>{(share * 100).toFixed(0)}%</span>
+                      {compareOn && (
+                        <span style={{ width: 62, textAlign: "right" }} title={`Compare period: ${fmt(pv)}`}>
+                          <Delta small cur={v} prev={pv} />
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </CC>
+      </div>
+
       {/* Imported sales history: all-time revenue by year + summary metrics */}
       {historicalSales.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 14, marginBottom: 14 }}>
@@ -536,11 +1088,7 @@ export default function Reports({ data }) {
               sub="imported sales sheet"
               accent="#64748B"
             />
-            <MetricCard
-              value={fmtNum(histTotals.orders)}
-              label="Historical Orders"
-              accent="#64748B"
-            />
+            <MetricCard value={fmtNum(histTotals.orders)} label="Historical Orders" accent="#64748B" />
             <MetricCard
               value={histTotals.fillRate != null ? (histTotals.fillRate * 100).toFixed(1) + "%" : "--"}
               label="Historical Fill Rate"
@@ -548,18 +1096,13 @@ export default function Reports({ data }) {
               accent="#06B6D4"
             />
           </div>
-          <CC title="Revenue by Year — live system + imported history">
+          <CC title="Invoiced Revenue by Year — live system + imported history">
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={byYear}>
+              <BarChart data={byYear} maxBarSize={80}>
                 <XAxis dataKey="year" tick={{ fill: "#94A3B8", fontSize: 11 }} />
-                <YAxis tick={{ fill: "#94A3B8", fontSize: 10 }} />
+                <YAxis tick={{ fill: "#94A3B8", fontSize: 10 }} tickFormatter={fmtK} width={56} />
                 <Tooltip
-                  contentStyle={{
-                    background: "#FFFFFF",
-                    border: "1px solid #CBD5E1",
-                    borderRadius: 8,
-                    color: "#0F172A",
-                  }}
+                  contentStyle={tooltipStyle}
                   formatter={(v, name) => [fmt(v), name === "history" ? "Imported history" : "Live system"]}
                 />
                 <Bar dataKey="history" stackId="rev" fill="#94A3B8" radius={[0, 0, 0, 0]} />
@@ -570,19 +1113,12 @@ export default function Reports({ data }) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(420px,1fr))", gap: 14, marginBottom: 14 }}>
         <CC title="Available Stock Health">
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <ResponsiveContainer width={140} height={140}>
               <PieChart>
-                <Pie
-                  data={stockPie}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={40}
-                  outerRadius={65}
-                  dataKey="value"
-                >
+                <Pie data={stockPie} cx="50%" cy="50%" innerRadius={40} outerRadius={65} dataKey="value">
                   {stockPie.map((_, i) => (
                     <Cell key={i} fill={PIE_COLORS[i]} />
                   ))}
@@ -625,12 +1161,7 @@ export default function Reports({ data }) {
               const col = { confirmed: "#3B82F6", picked: "#EAB308", booked: "#06B6D4", shipped: "#10B981" }[s];
               const ords = salesOrders.filter((o) => o.fulfillmentStage === s);
               const val = ords.reduce(
-                (sum, o) =>
-                  sum +
-                  o.lines.reduce(
-                    (ls, l) => ls + (l.qtyFilled != null ? l.qtyFilled : l.qty) * l.price,
-                    0,
-                  ),
+                (sum, o) => sum + o.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0),
                 0,
               );
               return (
@@ -674,11 +1205,7 @@ export default function Reports({ data }) {
             marginBottom: 14,
           }}
         >
-          <select
-            value={custSel}
-            onChange={(e) => setCustSel(e.target.value)}
-            style={{ ...SS, width: 240 }}
-          >
+          <select value={custSel} onChange={(e) => setCustSel(e.target.value)} style={{ ...SS, width: 240 }}>
             <option value="all">All Customers</option>
             {customerOptions.map((name) => (
               <option key={name} value={name}>

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS, MIDSTATES_BILL_TO } from "../lib/constants";
-import { computeInventory, advanceStage, resolveBackorders } from "../lib/inventory";
+import { computeInventory, advanceStage, resolveBackorders, preOrderCoverage } from "../lib/inventory";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
 import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo";
@@ -1054,6 +1054,28 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
 export default function SalesOrders({ data, setData }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("all");
+  // Open pre-orders can number in the dozens -- let the list hide them
+  // (remembered per browser). The "Pre-Orders" tab always shows them.
+  const [hidePre, setHidePre] = useState(() => {
+    try {
+      return localStorage.getItem("acc_orders_hide_pre") === "1";
+    } catch (_) {
+      return false;
+    }
+  });
+  const toggleHidePre = () =>
+    setHidePre((v) => {
+      try {
+        localStorage.setItem("acc_orders_hide_pre", v ? "0" : "1");
+      } catch (_) {}
+      return !v;
+    });
+  const isOpenPre = (o) => o.type === "preorder" && LOCKING.has(o.fulfillmentStage);
+  // Pre-order units covered by reserved on-hand stock aren't really short
+  const preCoverage = useMemo(
+    () => preOrderCoverage(data.products, data.salesOrders).byLine,
+    [data.products, data.salesOrders],
+  );
   const [selected, setSelected] = useState(null); // order object for drawer
   const [editingOrder, setEditingOrder] = useState(null); // order being edited
   const [showImport, setShowImport] = useState(false);
@@ -1119,7 +1141,12 @@ export default function SalesOrders({ data, setData }) {
     const q = search.toLowerCase();
     return data.salesOrders
       .filter((o) => {
-        if (stageFilter !== "all" && o.fulfillmentStage !== stageFilter) return false;
+        if (stageFilter === "preorder") {
+          if (!isOpenPre(o)) return false;
+        } else {
+          if (stageFilter !== "all" && o.fulfillmentStage !== stageFilter) return false;
+          if (hidePre && isOpenPre(o)) return false;
+        }
         if (!q) return true;
         return (
           o.orderNum.toLowerCase().includes(q) ||
@@ -1139,7 +1166,7 @@ export default function SalesOrders({ data, setData }) {
         const diff = n(b) - n(a);
         return diff !== 0 ? diff : (b.date || "").localeCompare(a.date || "");
       });
-  }, [data.salesOrders, search, stageFilter]);
+  }, [data.salesOrders, search, stageFilter, hidePre]);
 
   // Stage counts for filter tabs
   const stageCounts = useMemo(() => {
@@ -1148,6 +1175,7 @@ export default function SalesOrders({ data, setData }) {
       c[s] = data.salesOrders.filter((o) => o.fulfillmentStage === s).length;
     });
     c.cancelled = data.salesOrders.filter((o) => o.fulfillmentStage === "cancelled").length;
+    c.preorder = data.salesOrders.filter(isOpenPre).length;
     return c;
   }, [data.salesOrders]);
 
@@ -1195,6 +1223,7 @@ export default function SalesOrders({ data, setData }) {
     { key: "all", label: "All" },
     ...STAGES.map((s) => ({ key: s, label: STAGE_LABEL[s] })),
     { key: "cancelled", label: "Cancelled" },
+    { key: "preorder", label: "Open Pre-Orders" },
   ];
 
   return (
@@ -1265,6 +1294,23 @@ export default function SalesOrders({ data, setData }) {
             {tab.label} ({stageCounts[tab.key] || 0})
           </button>
         ))}
+        {stageCounts.preorder > 0 && stageFilter !== "preorder" && (
+          <label
+            style={{
+              marginLeft: "auto",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: "#6D28D9",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            <input type="checkbox" checked={hidePre} onChange={toggleHidePre} />
+            Hide open pre-orders ({stageCounts.preorder})
+          </label>
+        )}
       </div>
 
       {/* Orders table */}
@@ -1278,7 +1324,12 @@ export default function SalesOrders({ data, setData }) {
           const units = o.lines.reduce((s, l) => s + l.qty, 0);
           const value = o.lines.reduce((s, l) => s + l.qty * l.price, 0);
           const boUnits = o.lines.reduce(
-            (s, l) => s + (l.qtyBackordered != null ? l.qtyBackordered : 0),
+            (s, l, li) =>
+              s +
+              Math.max(
+                0,
+                (l.qtyBackordered != null ? l.qtyBackordered : 0) - (preCoverage[`${o.id}:${li}`] || 0),
+              ),
             0,
           );
           const hasBO = boUnits > 0;
