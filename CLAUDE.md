@@ -54,7 +54,8 @@ the user to merge; pushed ≠ deployed.
   handlers in `/server`; plus `api/claude/analyze.js`,
   `api/notify/shipped.js`, `api/notify/stage.js`, `api/parse-po.js`
   (AI PDF supplier POs), `api/cron/shipstation-pull.js` (6am/10pm CT
-  inventory pull + data snapshot; needs SUPABASE_SERVICE_ROLE_KEY).
+  data snapshot + inventory pull + pre-order release/auto-fill; needs
+  SUPABASE_SERVICE_ROLE_KEY).
 - Key libs: `parseAccOrderWriter.js` (label-anchored order-writer
   parser; 2025/2026/2027 dealer/distributor/buying-group layouts, tips
   sections incl. N/A-UPC + rod-SKU derivation), `inventory.js`
@@ -68,6 +69,15 @@ board card → Picked & Packed: push to ShipStation (orderKey=order.id,
 orderNumber=dealerPORef, parsed address, customer email/phone) → Booked:
 QBO invoice auto-created unsent (when QBO connected) → tracking
 auto-syncs every 5 min on board → Shipped: customer email + team notifs.
+
+Pre-orders (`src/lib/preorderRelease.js`, shared by app + cron): held out of
+the pick queue; shelf stock left after current orders is soft-reserved for
+them (earliest ship window first). Current orders outrank pre-orders: imports
+fill from `pickable` (onHand − locked) and an automatic pass fills current
+Confirmed orders' backorders from shelf stock. 10 days before
+`requestedShipDate` a pre-order auto-releases to Confirmed (reserved units →
+fills, `preorderReleasedAt`, "Confirmed" emails). The pass runs in the cron
+(6am/10pm CT) and in App.jsx on fresh data.
 
 ### Env vars (Vercel)
 VITE_SUPABASE_URL/_ANON_KEY (browser), SUPABASE_URL +

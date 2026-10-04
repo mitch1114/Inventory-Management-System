@@ -54,9 +54,10 @@ export async function sendShippedEmail(order, customers) {
  * @param {Object} order - Sales order (expects orderNum, dealerPORef, customer, lines)
  * @param {string} stage - Stage just reached ("confirmed" | "picked" | "booked" | "shipped")
  * @param {Array} rules - Notification rules ({ id, name, email, stage })
+ * @param {string} [extraNote] - Note line for the email (overrides the default)
  * @returns {{ sent?: boolean, skipped?: boolean, reason?: string }}
  */
-export async function sendStageNotifications(order, stage, rules) {
+export async function sendStageNotifications(order, stage, rules, extraNote) {
   const matching = (rules || []).filter(
     (r) => r.stage === stage && r.email && String(r.email).includes("@"),
   );
@@ -74,10 +75,10 @@ export async function sendStageNotifications(order, stage, rules) {
     );
 
     const shipment = order.shipment || {};
-    const note =
-      stage === "shipped" && (shipment.carrier || shipment.trackingNum)
+    const note = extraNote ||
+      (stage === "shipped" && (shipment.carrier || shipment.trackingNum)
         ? `Shipped via ${shipment.carrier || "?"}${shipment.trackingNum ? ` -- ${shipment.trackingNum}` : ""}`
-        : "";
+        : "");
 
     const res = await fetch("/api/notify/stage", {
       method: "POST",

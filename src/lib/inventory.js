@@ -1,67 +1,18 @@
 import { LOCKING, STAGE_LABEL } from "./constants";
 import { uid, nowIso, todayIso, nextSoNumber, fmtNum } from "./utils";
+import { lockedByProduct, preOrderCoverage, isHeldPreorder } from "./preorderRelease.js";
+
+export { preOrderCoverage };
 
 // --- Core inventory engine ----------------------------------------------------
 // available = onHand - locked - preOrderReserved
 //   locked           = filled units in confirmed/picked/booked orders
-//   preOrderReserved = on-hand stock set aside for confirmed pre-orders' unfilled
-//                      units (see preOrderCoverage)
+//   preOrderReserved = on-hand stock set aside for held pre-orders' unfilled
+//                      units (see preOrderCoverage in preorderRelease.js)
 // onHand only decrements when "shipped"
 
 const lineFilled = (l) => (l.qtyFilled != null ? l.qtyFilled : l.qty);
 const lineBO = (l) => (l.qtyBackordered != null ? l.qtyBackordered : 0);
-
-function lockedByProduct(salesOrders) {
-  const locked = {};
-  (salesOrders || []).forEach((o) => {
-    if (!LOCKING.has(o.fulfillmentStage)) return;
-    (o.lines || []).forEach((l) => {
-      const f = lineFilled(l);
-      if (f > 0) locked[l.productId] = (locked[l.productId] || 0) + f;
-    });
-  });
-  return locked;
-}
-
-/**
- * Reserve free on-hand stock (onHand - locked) for the unfilled units of
- * confirmed pre-orders, earliest ship window first. Pre-orders import with
- * every unit on backorder so they don't grab stock at import time; this keeps
- * that stock from also being promised to other orders until the pre-order is
- * picked (reserved units become real fills then) or receiving fills it.
- *
- * Returns { byLine: { "<orderId>:<lineIdx>": coveredQty }, byProduct: { pid: reservedQty } }.
- */
-export function preOrderCoverage(products, salesOrders, lockedMap) {
-  const locked = lockedMap || lockedByProduct(salesOrders);
-  const free = {};
-  (products || []).forEach((p) => {
-    free[p.id] = Math.max(0, (p.onHand || 0) - (locked[p.id] || 0));
-  });
-  const byLine = {};
-  const byProduct = {};
-  const shipKey = (o) => o.requestedShipDate || o.date || "";
-  (salesOrders || [])
-    .filter((o) => o.fulfillmentStage === "confirmed" && o.type === "preorder")
-    .sort(
-      (a, b) =>
-        shipKey(a).localeCompare(shipKey(b)) ||
-        (a.date || "").localeCompare(b.date || "") ||
-        (a.orderNum || "").localeCompare(b.orderNum || ""),
-    )
-    .forEach((o) => {
-      (o.lines || []).forEach((l, i) => {
-        const bo = lineBO(l);
-        if (bo <= 0) return;
-        const cover = Math.min(bo, free[l.productId] || 0);
-        if (cover <= 0) return;
-        free[l.productId] -= cover;
-        byLine[`${o.id}:${i}`] = cover;
-        byProduct[l.productId] = (byProduct[l.productId] || 0) + cover;
-      });
-    });
-  return { byLine, byProduct };
-}
 
 export function computeInventory(products, salesOrders) {
   const locked = lockedByProduct(salesOrders);
@@ -92,6 +43,10 @@ export function computeInventory(products, salesOrders) {
       // units are covered by on-hand stock, so they aren't short).
       backordered: Math.max(0, (bord[p.id] || 0) - res),
       preOrderReserved: res,
+      // Shelf stock not committed to an active order -- what current orders
+      // can fill from (they outrank held pre-orders)
+      pickable: Math.max(0, p.onHand - lk),
+      // Free to promise without shorting any pre-order
       available: Math.max(0, p.onHand - lk - res),
       preOrderLocked: preLocked[p.id] || 0,
       preOrderAwaiting: Math.max(0, (preBO[p.id] || 0) - res),
@@ -226,7 +181,7 @@ export function resolveBackorders(data, orderId, policy) {
 
   // policy "split" -- carve the remainder into a tracked backorder order
   const computed = computeInventory(data.products, data.salesOrders);
-  const availMap = Object.fromEntries(computed.map((p) => [p.id, p.available]));
+  const availMap = Object.fromEntries(computed.map((p) => [p.id, p.pickable]));
   const num = nextSoNumber(data);
   const orderNum = `SO-${String(num).padStart(4, "0")}`;
   const childLines = boLines.map((l) => {
@@ -292,6 +247,9 @@ export function autoAllocate(data, receivedLines) {
       .filter(
         ({ o }) =>
           LOCKING.has(o.fulfillmentStage) &&
+          // Held pre-orders don't take hard fills -- received stock they need
+          // is reserved for them automatically (preOrderCoverage)
+          !isHeldPreorder(o) &&
           o.lines.some(
             (l) => l.productId === productId && (l.qtyBackordered != null ? l.qtyBackordered : 0) > 0,
           ),
