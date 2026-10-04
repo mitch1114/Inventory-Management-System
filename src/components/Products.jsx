@@ -228,7 +228,13 @@ function SkuDrawer({ product, data, setData, onClose, onEdit }) {
                 },
               ]
             : []),
-          { label: "Available", value: fmtNum(computed.available), color: computed.available === 0 ? "#DC2626" : computed.available <= product.reorderPoint ? "#854D0E" : "#15803D" },
+          {
+            label: "Available",
+            value: fmtNum(computed.available),
+            color: computed.available === 0 ? "#DC2626" : computed.available <= product.reorderPoint ? "#854D0E" : "#15803D",
+            sub: computed.pickable > computed.available ? `${fmtNum(computed.pickable)} on shelf for current orders` : "",
+            subColor: "#15803D",
+          },
           { label: "Backordered", value: computed.backordered > 0 ? fmtNum(computed.backordered) : "--", color: computed.backordered > 0 ? "#F97316" : "#94A3B8" },
         ].map((s) => (
           <div key={s.label} title={s.tip || undefined}>
@@ -238,7 +244,7 @@ function SkuDrawer({ product, data, setData, onClose, onEdit }) {
             <div style={{ fontSize: 18, fontWeight: 800, color: s.color, marginTop: 2 }}>
               {s.value}
             </div>
-            {s.sub && <div style={{ fontSize: 10, color: "#C2410C", fontWeight: 600 }}>{s.sub}</div>}
+            {s.sub && <div style={{ fontSize: 10, color: s.subColor || "#C2410C", fontWeight: 600 }}>{s.sub}</div>}
           </div>
         ))}
       </div>
@@ -832,8 +838,13 @@ export default function Products({ data, setData }) {
           // Out-of-stock items with an open supplier PO show as On Order with
           // the (earliest) expected arrival date instead of a dead end.
           const incomingDate = onOrderDates[p.id];
+          // Zero "available" only because stock is reserved for pre-orders --
+          // it's still on the shelf for current orders
+          const preOnly = p.available === 0 && p.pickable > 0;
           const status =
-            p.available === 0
+            preOnly
+              ? "preorder"
+              : p.available === 0
               ? incomingDate
                 ? "booked"
                 : "cancelled"
@@ -841,7 +852,9 @@ export default function Products({ data, setData }) {
                 ? "partial"
                 : "confirmed";
           const statusLabel =
-            p.available === 0
+            preOnly
+              ? "Reserved for pre-orders"
+              : p.available === 0
               ? incomingDate
                 ? `On Order · arrives ${fmtDate(incomingDate)}`
                 : "Out of Stock"
@@ -922,6 +935,14 @@ export default function Products({ data, setData }) {
                 >
                   {fmtNum(p.available)}
                 </span>
+                {p.pickable > p.available && (
+                  <div
+                    title="Shelf stock current orders can fill from -- current orders outrank pre-orders"
+                    style={{ fontSize: 10, color: "#15803D", fontWeight: 600, marginTop: 3, whiteSpace: "nowrap" }}
+                  >
+                    {fmtNum(p.pickable)} on shelf for current orders
+                  </div>
+                )}
               </TD>
               <TD>
                 <Badge status={status} label={statusLabel} />

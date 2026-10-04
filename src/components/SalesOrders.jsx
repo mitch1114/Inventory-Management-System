@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS, MIDSTATES_BILL_TO } from "../lib/constants";
 import { computeInventory, advanceStage, resolveBackorders, preOrderCoverage } from "../lib/inventory";
+import { isHeldPreorder } from "../lib/preorderRelease.js";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
 import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo";
@@ -901,7 +902,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
                       {p ? p.name : "--"}
                       {cp && LOCKING.has(order.fulfillmentStage) && (
                         <div style={{ fontSize: 10, color: "#94A3B8" }}>
-                          {fmtNum(cp.available)} avail
+                          {fmtNum(cp.pickable)} on shelf
                         </div>
                       )}
                     </td>
@@ -1054,8 +1055,9 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
 export default function SalesOrders({ data, setData }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("all");
-  // Open pre-orders can number in the dozens -- let the list hide them
-  // (remembered per browser). The "Pre-Orders" tab always shows them.
+  // Held pre-orders (not yet released to the pick queue) can number in the
+  // dozens -- let the list hide them (remembered per browser). The "Held
+  // Pre-Orders" tab always shows them.
   const [hidePre, setHidePre] = useState(() => {
     try {
       return localStorage.getItem("acc_orders_hide_pre") === "1";
@@ -1070,7 +1072,7 @@ export default function SalesOrders({ data, setData }) {
       } catch (_) {}
       return !v;
     });
-  const isOpenPre = (o) => o.type === "preorder" && LOCKING.has(o.fulfillmentStage);
+  const isOpenPre = isHeldPreorder;
   // Pre-order units covered by reserved on-hand stock aren't really short
   const preCoverage = useMemo(
     () => preOrderCoverage(data.products, data.salesOrders).byLine,
@@ -1223,7 +1225,7 @@ export default function SalesOrders({ data, setData }) {
     { key: "all", label: "All" },
     ...STAGES.map((s) => ({ key: s, label: STAGE_LABEL[s] })),
     { key: "cancelled", label: "Cancelled" },
-    { key: "preorder", label: "Open Pre-Orders" },
+    { key: "preorder", label: "Held Pre-Orders" },
   ];
 
   return (
@@ -1308,7 +1310,7 @@ export default function SalesOrders({ data, setData }) {
             }}
           >
             <input type="checkbox" checked={hidePre} onChange={toggleHidePre} />
-            Hide open pre-orders ({stageCounts.preorder})
+            Hide held pre-orders ({stageCounts.preorder})
           </label>
         )}
       </div>

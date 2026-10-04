@@ -1,6 +1,9 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { LOCKING } from "./lib/constants";
 import { computeInventory } from "./lib/inventory";
+import { runOrderAutomation, PREORDER_RELEASE_DAYS } from "./lib/preorderRelease.js";
+import { sendStageNotifications, notifyAuditEntry } from "./lib/notify";
+import { uid, nowIso } from "./lib/utils";
 import { loadData, saveData, subscribeToChanges, onSaveResult, onConflict, refreshFromRemote } from "./lib/storage";
 import { isSupabaseConfigured } from "./lib/supabase";
 import { isAuthEnabled, getSession, onAuthChange, signOut } from "./lib/auth";
@@ -155,6 +158,49 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // Automatic order pass (the 6am/10pm cron runs the same pass server-side):
+  // fill current orders' backorders from shelf stock, then release pre-orders
+  // within PREORDER_RELEASE_DAYS of their ship date into the pick queue. Runs
+  // on fresh data only -- after load, refetch or a realtime update -- and an
+  // hourly refetch keeps a tab left open overnight releasing on time.
+  const [autoTick, setAutoTick] = useState(0);
+  const releaseNotified = useRef(new Set());
+  useEffect(() => {
+    if (!authed) return;
+    const t = setInterval(() => {
+      if (!isSupabaseConfigured()) return setAutoTick((n) => n + 1);
+      refreshFromRemote().then((fresh) => {
+        if (fresh) setDataRaw(fresh);
+        setAutoTick((n) => n + 1);
+      });
+    }, 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [authed]);
+  useEffect(() => {
+    if (loading || !authed) return;
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const opts = { today, now: nowIso(), makeId: uid };
+    const preview = runOrderAutomation(dataRaw, opts);
+    if (preview.filled.length === 0 && preview.released.length === 0) return;
+    setData((prev) => runOrderAutomation(prev, opts).data);
+    preview.released.forEach((o) => {
+      if (releaseNotified.current.has(o.id)) return;
+      releaseNotified.current.add(o.id);
+      const units = o.lines.reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0);
+      const ordered = o.lines.reduce((s, l) => s + l.qty, 0);
+      sendStageNotifications(
+        o,
+        "confirmed",
+        dataRaw.notificationRules,
+        `Pre-order released to the pick queue ${PREORDER_RELEASE_DAYS} days before its requested ship date (${o.requestedShipDate}). ${units} of ${ordered} units in stock.`,
+      ).then((r) => {
+        const entry = notifyAuditEntry(o.orderNum, "confirmed", r);
+        if (entry) setData((cur) => ({ ...cur, auditLog: [...(cur.auditLog || []), entry] }));
+      });
+    });
+  }, [dataRaw, loading, authed, autoTick]);
 
   const data = useMemo(
     () => ({

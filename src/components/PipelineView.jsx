@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS } from "../lib/constants";
 import { computeInventory, advanceStage, resolveBackorders, preOrderCoverage, preOrderTip } from "../lib/inventory";
+import { isHeldPreorder, releaseDateOf, PREORDER_RELEASE_DAYS } from "../lib/preorderRelease.js";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
@@ -74,10 +75,9 @@ export default function PipelineView({ data, setData }) {
     [data.products],
   );
   const skuToProdId = useMemo(() => buildScanIndex(data.products), [data.products]);
-  // ALL confirmed pre-orders are HELD out of the Confirmed column -- they
-  // ship on their release window, not the moment stock exists, so they don't
-  // belong in the pick queue. Each card shows whether its stock has arrived.
-  const isPreHold = (o) => o.fulfillmentStage === "confirmed" && o.type === "preorder";
+  // Pre-orders are held until PREORDER_RELEASE_DAYS before their ship date,
+  // then released automatically into the Confirmed column.
+  const isPreHold = isHeldPreorder;
   const preHoldOrders = useMemo(() => data.salesOrders.filter(isPreHold), [data.salesOrders]);
   // On-hand stock reserved for each pre-order line (earliest ship window first)
   const preCoverage = useMemo(
@@ -872,8 +872,9 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                   />
                 </div>
                 <div style={{ fontSize: 11, color: "#7C3AED", marginBottom: 6 }}>
-                  Held out of the pick queue. In-stock units are reserved for these orders (earliest
-                  ship window first); the rest auto-fill on receiving. Pick when the ship window arrives.
+                  Held out of the pick queue until {PREORDER_RELEASE_DAYS} days before the requested ship
+                  date, then moved to Confirmed automatically. Shelf stock not needed by current orders is
+                  reserved for them (earliest ship window first).
                 </div>
                 <div style={{ maxHeight: 420, overflow: "auto", background: "#FFFFFF", border: "1px solid #DDD6FE", borderRadius: 8 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
@@ -901,7 +902,14 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                               )}
                             </td>
                             <td style={{ ...td, fontWeight: 600, color: "#0F172A" }}>{o.customer}</td>
-                            <td style={td}>{o.requestedShipDate ? fmtDate(o.requestedShipDate) : "--"}</td>
+                            <td style={td}>
+                              {o.requestedShipDate ? fmtDate(o.requestedShipDate) : "--"}
+                              <div style={{ fontSize: 10, color: o.requestedShipDate ? "#7C3AED" : "#C2410C" }}>
+                                {o.requestedShipDate
+                                  ? `To pick queue ${fmtDate(releaseDateOf(o))}`
+                                  : "No ship date -- won't auto-release"}
+                              </div>
+                            </td>
                             <td style={td}>{fmtNum(st.ordered)}</td>
                             <td style={td}>{fmt(total)}</td>
                             <td style={td}>
@@ -1076,8 +1084,11 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                           <Badge status={stage} label={STAGE_LABEL[stage]} />
                         )}
                         {hasBO && <Badge status="backordered" label="Has BO" />}
-                        {o.type === "preorder" && !hasBO && (
-                          <Badge status="preorder" label="Pre-order · stock ready" />
+                        {o.type === "preorder" && (
+                          <Badge
+                            status="preorder"
+                            label={o.requestedShipDate ? `Pre-order · ships ${fmtDate(o.requestedShipDate)}` : "Pre-order"}
+                          />
                         )}
                       </div>
                       <div style={{ fontSize: 13, color: "#0F172A", fontWeight: 600, marginBottom: 2 }}>
@@ -1362,6 +1373,11 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                   >
                     {fmtNum(p.available)}
                   </span>
+                  {p.pickable > p.available && (
+                    <div style={{ fontSize: 10, color: "#15803D", fontWeight: 600, marginTop: 3 }}>
+                      {fmtNum(p.pickable)} on shelf for current orders
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

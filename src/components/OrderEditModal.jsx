@@ -56,11 +56,16 @@ export default function OrderEditModal({ order, data, setData, onClose }) {
 
   const save = () => {
     const isLocking = LOCKING.has(order.fulfillmentStage);
-    const isPreorder = (form.type || order.type) === "preorder";
+    // Held pre-orders keep added units on backorder (stock is reserved for
+    // them automatically); released pre-orders fill like any current order.
+    const isPreorder =
+      (form.type || order.type) === "preorder" &&
+      order.fulfillmentStage === "confirmed" &&
+      !order.preorderReleasedAt;
     // This order's current fills are already counted as locked, so "available"
     // is the right pool for units added by this edit. Units removed by the
     // edit release automatically when inventory recomputes from the new lines.
-    const availMap = Object.fromEntries(computedProds.map((p) => [p.id, p.available]));
+    const availMap = Object.fromEntries(computedProds.map((p) => [p.id, p.pickable]));
 
     const lines = form.lines
       .filter((l) => l.productId)
@@ -276,7 +281,7 @@ export default function OrderEditModal({ order, data, setData, onClose }) {
                 ))}
               </select>
               <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2, paddingLeft: 2 }}>
-                {cp ? `${fmtNum(cp.available)} available` : ""}
+                {cp ? `${fmtNum(cp.pickable)} on shelf to fill` : ""}
                 {isNewLine && line.productId && (
                   <span style={{ color: "#6D28D9", fontWeight: 700 }}> · new line</span>
                 )}

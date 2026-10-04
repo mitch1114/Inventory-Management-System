@@ -178,7 +178,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
           desc: name || (prod ? prod.name : ""),
           productId: prod ? prod.id : "",
           productName: prod ? prod.name : "",
-          available: cp ? cp.available : 0,
+          available: cp ? cp.pickable : 0,
           sellPrice: prod ? prod.sellPrice : price,
           matched: !!prod,
         };
@@ -279,7 +279,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
                 ...p,
                 productId: prod ? prod.id : "",
                 productName: prod ? prod.name : "",
-                available: cp ? cp.available : 0,
+                available: cp ? cp.pickable : 0,
                 sellPrice: prod ? prod.sellPrice : p.msrp,
                 matched: !!prod,
               };
@@ -378,7 +378,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
               desc: l.desc || (prod ? prod.name : ""),
               productId: prod ? prod.id : "",
               productName: prod ? prod.name : "",
-              available: cp ? cp.available : 0,
+              available: cp ? cp.pickable : 0,
               sellPrice: prod ? prod.sellPrice : l.price,
               matched: !!prod,
             };
@@ -476,7 +476,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
     const isPreorder = orderKind === "preorder";
     const orderLines = validLines.map((l) => {
       const cp = computedProds.find((c) => c.id === l.productId);
-      const avail = cp ? cp.available : 0;
+      const avail = cp ? cp.pickable : 0;
       // Pre-orders reserve nothing now -- everything backorders and auto-fills
       // when stock is received.
       const filled = isPreorder ? 0 : Math.min(l.qty, avail);
@@ -1545,7 +1545,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
                 <tbody>
                   {matchedLines.map((l, i) => {
                     const cp = computedProds.find((c) => c.id === l.productId);
-                    const avail = cp ? cp.available : 0;
+                    const avail = cp ? cp.pickable : 0;
                     const filled = orderKind === "preorder" ? 0 : Math.min(l.qty, avail);
                     const bo = l.qty - filled;
                     return (
@@ -1656,7 +1656,7 @@ export default function DealerPOImport({ data, setData, onClose }) {
           {/* Backorder warning */}
           {orderKind !== "preorder" && matchedLines.some((l) => {
             const cp = computedProds.find((c) => c.id === l.productId);
-            return l.qty > (cp ? cp.available : 0);
+            return l.qty > (cp ? cp.pickable : 0);
           }) && (
             <div
               style={{
