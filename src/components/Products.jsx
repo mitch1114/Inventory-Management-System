@@ -3,6 +3,7 @@ import { LOCKING } from "../lib/constants";
 import { computeInventory, preOrderTip } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, toCSV, dlCSV, parseCSV } from "../lib/utils";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD } from "./ui";
+import CostImportModal from "./CostImportModal";
 
 // =============================================================================
 // AdjPreview -- shows the live preview of a stock adjustment before applying
@@ -504,6 +505,7 @@ export default function Products({ data, setData }) {
   const [form, setForm] = useState(blankProduct());
   const [drawerProduct, setDrawerProduct] = useState(null);
   const [importModal, setImportModal] = useState(false);
+  const [costImportOpen, setCostImportOpen] = useState(false);
   const [importRows, setImportRows] = useState([]);
   const fileRef = useRef(null);
 
@@ -570,13 +572,28 @@ export default function Products({ data, setData }) {
       reorderPoint: p.reorderPoint || 0,
       reorderQty: p.reorderQty || 0,
       supplier: p.supplier || "",
+      fetRatePct: p.fetRate != null ? String(Math.round(p.fetRate * 1000) / 10) : "",
+      fetCap: p.fetCap ? String(p.fetCap) : "",
+      fetBase: p.fetBase ? String(p.fetBase) : "",
     });
     setEditing(p);
   };
 
+  // FET inputs are edited as text (blank = not set) and stored as numbers
+  const formToProduct = (f) => {
+    const { fetRatePct, fetCap, fetBase, ...rest } = f;
+    const num = (v) => (v === "" || v == null || isNaN(+v) ? null : +v);
+    return {
+      ...rest,
+      fetRate: num(fetRatePct) != null ? num(fetRatePct) / 100 : null,
+      fetCap: num(fetCap),
+      fetBase: num(fetBase),
+    };
+  };
+
   const save = () => {
     if (editing === "new") {
-      const prod = { id: uid(), ...form };
+      const prod = { id: uid(), ...formToProduct(form) };
       setData((d) => ({
         ...d,
         products: [...d.products, prod],
@@ -594,7 +611,7 @@ export default function Products({ data, setData }) {
     } else {
       setData((d) => ({
         ...d,
-        products: d.products.map((p) => (p.id === editing.id ? { ...p, ...form } : p)),
+        products: d.products.map((p) => (p.id === editing.id ? { ...p, ...formToProduct(form) } : p)),
         auditLog: [
           ...(d.auditLog || []),
           {
@@ -608,7 +625,7 @@ export default function Products({ data, setData }) {
       }));
       // If drawer is open for this product, refresh it
       if (drawerProduct && drawerProduct.id === editing.id) {
-        setDrawerProduct({ ...editing, ...form });
+        setDrawerProduct({ ...editing, ...formToProduct(form) });
       }
     }
     setEditing(null);
@@ -823,6 +840,9 @@ export default function Products({ data, setData }) {
             style={{ display: "none" }}
             onChange={handleImportFile}
           />
+          <button style={BS} onClick={() => setCostImportOpen(true)} title="Update Cost & Landed from the pricing & margins workbook">
+            Import Costs (Excel)
+          </button>
           <button style={BP} onClick={openNew}>
             + New Product
           </button>
@@ -1056,6 +1076,39 @@ export default function Products({ data, setData }) {
                 onChange={(e) => setForm((f) => ({ ...f, landedCost: +e.target.value || 0 }))}
               />
             </Field>
+            <Field label="FET rate % (blank = not set)">
+              <input
+                style={IS}
+                type="number"
+                step="0.1"
+                min="0"
+                placeholder="e.g. 10"
+                value={form.fetRatePct ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, fetRatePct: e.target.value }))}
+              />
+            </Field>
+            <Field label="FET base $ (distributor price)">
+              <input
+                style={IS}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="blank = actual price"
+                value={form.fetBase ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, fetBase: e.target.value }))}
+              />
+            </Field>
+            <Field label="FET cap $ per unit (rods: 10)">
+              <input
+                style={IS}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="blank = no cap"
+                value={form.fetCap ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, fetCap: e.target.value }))}
+              />
+            </Field>
             <Field label="Sell Price">
               <input
                 style={IS}
@@ -1118,6 +1171,10 @@ export default function Products({ data, setData }) {
             </button>
           </div>
         </Modal>
+      )}
+
+      {costImportOpen && (
+        <CostImportModal data={data} setData={setData} onClose={() => setCostImportOpen(false)} />
       )}
 
       {/* Import CSV Modal */}

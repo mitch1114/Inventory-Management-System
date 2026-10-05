@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { STAGES, STAGE_LABEL, LOCKING } from "../lib/constants";
 import { computeInventory, preOrderCoverage } from "../lib/inventory";
+import { orderMargin, sumMargins, marginColor, MARGIN_TARGET } from "../lib/orderMargin";
 import { historyRevenue } from "../lib/historyImport";
 import {
   buildSalesFacts,
@@ -22,6 +23,7 @@ import {
   pctChange,
   addMonths,
   CHANNEL_LABELS,
+  normalizeChannel,
 } from "../lib/salesMetrics";
 import { fmt, fmtNum, fmtDate, toCSV, dlCSV } from "../lib/utils";
 import { Badge, Table, TR, TD, SS, BS } from "./ui";
@@ -293,6 +295,8 @@ export default function Reports({ data }) {
   const [prodMetric, setProdMetric] = useState("rev"); // rev | units
   const [yoyMetric, setYoyMetric] = useState("topLine"); // topLine | invoiced
   const [showAllCust, setShowAllCust] = useState(false);
+  const [marginBy, setMarginBy] = useState("customer"); // customer | channel | product
+  const [showAllMargin, setShowAllMargin] = useState(false);
 
   // Selected reporting period -- scopes the revenue metrics, charts, and the
   // customer report. Inventory/pipeline cards show CURRENT state (unscoped).
@@ -331,30 +335,50 @@ export default function Reports({ data }) {
         o.fulfillmentStage === "shipped" && shipDateOf(o) >= range[0] && shipDateOf(o) <= range[1],
     );
   const shipped = useMemo(() => shippedIn(curRange), [salesOrders, curRange]);
-  const liveInvoiced = shipped.reduce(
-    (s, o) => s + o.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0),
-    0,
-  );
-  // COGS: filled qty x landed cost (supplier cost when no landed cost yet)
-  const cogsOf = (orders) =>
-    orders.reduce(
-      (s, o) =>
-        s +
-        o.lines.reduce((ls, l) => {
-          const p = prodMap[l.productId];
-          return ls + filledQty(l) * ((p && (p.landedCost || p.costPrice)) || 0);
-        }, 0),
-      0,
-    );
-  const cogs = cogsOf(shipped);
-  const gp = liveInvoiced - cogs;
-  const prevGp = useMemo(() => {
+  // Gross margin on live orders shipped in the period: line price - landed
+  // cost - FET - freight ACC pays (lib/orderMargin; costs locked at shipment)
+  const marginOf = (orders) => sumMargins(orders.map((o) => orderMargin(o, prodMap)));
+  const mCur = useMemo(() => marginOf(shipped), [shipped, prodMap]);
+  const mPrev = useMemo(() => {
     if (!cmpRange) return null;
     const ords = shippedIn(cmpRange);
-    if (ords.length === 0) return null;
-    const rev = ords.reduce((s, o) => s + o.lines.reduce((ls, l) => ls + filledQty(l) * l.price, 0), 0);
-    return rev - cogsOf(ords);
+    return ords.length ? marginOf(ords) : null;
   }, [salesOrders, cmpRange, prodMap]);
+  const custTypeByName = useMemo(
+    () => Object.fromEntries((customers || []).map((c) => [String(c.name || "").toLowerCase().trim(), c.type])),
+    [customers],
+  );
+  const marginRows = useMemo(() => {
+    const m = {};
+    const add = (key, label, vals, extra) => {
+      const r = (m[key] = m[key] || { key, label, revenue: 0, profit: 0, units: 0, orders: 0, ...extra });
+      r.revenue += vals.revenue;
+      r.profit += vals.profit;
+      r.units += vals.units || 0;
+      r.orders += vals.orders || 0;
+    };
+    shipped.forEach((o) => {
+      const om = orderMargin(o, prodMap);
+      if (marginBy === "product") {
+        om.lines.forEach((l) => {
+          if (l.qty <= 0) return;
+          add(l.productId, l.sku || "(deleted product)", { revenue: l.revenue, profit: l.profit, units: l.qty }, { name: l.name, incomplete: 0 });
+          if (l.costSource === "missing") m[l.productId].incomplete = 1;
+        });
+        return;
+      }
+      const key =
+        marginBy === "customer"
+          ? o.customer || "(unknown)"
+          : normalizeChannel(o.channel || custTypeByName[String(o.customer || "").toLowerCase().trim()]);
+      const label = marginBy === "customer" ? key : CHANNEL_LABELS[key];
+      add(key, label, { revenue: om.revenue, profit: om.profit, orders: 1 }, { incomplete: 0 });
+      if (!om.complete) m[key].incomplete++;
+    });
+    return Object.values(m)
+      .map((r) => ({ ...r, pct: r.revenue > 0 ? r.profit / r.revenue : null }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [shipped, prodMap, marginBy, custTypeByName]);
 
   const openOrders = salesOrders.filter((o) => LOCKING.has(o.fulfillmentStage));
   const pipelineVal = openOrders.reduce(
@@ -809,21 +833,34 @@ export default function Reports({ data }) {
           marginBottom: 20,
         }}
       >
-        <MetricCard value={fmt(cogs)} label="COGS" sub="live orders, landed cost basis" accent="#EF4444" />
+        <MetricCard value={fmt(mCur.cogs)} label="COGS" sub="landed cost, shipped orders" accent="#EF4444" />
+        <MetricCard value={fmt(mCur.fet)} label="FET" sub="excise tax on shipped units" accent="#F43F5E" />
         <MetricCard
-          value={fmt(gp)}
+          value={fmt(mCur.accFreight)}
+          label="Freight ACC Paid"
+          sub={`shipping cost ${fmt(mCur.shippingCost)} - billed ${fmt(mCur.freightBilled)}`}
+          accent="#64748B"
+        />
+        <MetricCard
+          value={fmt(mCur.profit)}
           label="Gross Profit"
           sub={
-            compareOn && prevGp != null
-              ? `${pctChange(gp, prevGp) != null ? (pctChange(gp, prevGp) >= 0 ? "▲ " : "▼ ") + Math.abs(pctChange(gp, prevGp) * 100).toFixed(1) + "% " : ""}vs ${fmt(prevGp)}`
-              : "live orders"
+            compareOn && mPrev
+              ? `${pctChange(mCur.profit, mPrev.profit) != null ? (pctChange(mCur.profit, mPrev.profit) >= 0 ? "▲ " : "▼ ") + Math.abs(pctChange(mCur.profit, mPrev.profit) * 100).toFixed(1) + "% " : ""}vs ${fmt(mPrev.profit)}`
+              : "after cost, FET & freight"
           }
           accent="#7C3AED"
         />
         <MetricCard
-          value={liveInvoiced > 0 ? ((1 - cogs / liveInvoiced) * 100).toFixed(1) + "%" : "--"}
-          label="Margin"
-          sub="live orders"
+          value={mCur.marginPct != null ? (mCur.marginPct * 100).toFixed(1) + "%" : "--"}
+          label="Gross Margin"
+          sub={
+            mCur.incomplete > 0
+              ? `${mCur.incomplete} order(s) missing product costs`
+              : compareOn && mPrev && mPrev.marginPct != null
+                ? `vs ${(mPrev.marginPct * 100).toFixed(1)}% · target ${(MARGIN_TARGET * 100).toFixed(0)}%`
+                : `target ${(MARGIN_TARGET * 100).toFixed(0)}%`
+          }
           accent="#06B6D4"
         />
         <MetricCard value={fmt(pipelineVal)} label="Open Order Value" sub="current, filled units" accent="#EAB308" />
@@ -1074,6 +1111,96 @@ export default function Reports({ data }) {
                 </div>
               ))}
             </div>
+          )}
+        </CC>
+      </div>
+
+      {/* Gross margin by customer / channel / product (shipped live orders) */}
+      <div style={{ marginBottom: 14 }}>
+        <CC
+          title="Gross Margin"
+          right={
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <Toggle
+                value={marginBy}
+                onChange={(v) => {
+                  setMarginBy(v);
+                  setShowAllMargin(false);
+                }}
+                options={[
+                  ["customer", "By Customer"],
+                  ["channel", "By Channel"],
+                  ["product", "By Product"],
+                ]}
+              />
+              {marginRows.length > 12 && (
+                <button style={{ ...BS, fontSize: 11, padding: "4px 10px" }} onClick={() => setShowAllMargin((v) => !v)}>
+                  {showAllMargin ? "Top 12" : `Show all ${marginRows.length}`}
+                </button>
+              )}
+            </div>
+          }
+        >
+          {marginRows.length === 0 ? (
+            <div style={{ color: "#94A3B8", fontSize: 13, textAlign: "center", padding: "24px 0" }}>
+              No shipped orders in this period
+            </div>
+          ) : (
+            <>
+              <div style={{ overflowX: "auto", maxHeight: showAllMargin ? 480 : undefined, overflowY: showAllMargin ? "auto" : undefined }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...smallTh, textAlign: "left" }}>
+                        {marginBy === "customer" ? "Customer" : marginBy === "channel" ? "Channel" : "Product"}
+                      </th>
+                      <th style={smallTh}>{marginBy === "product" ? "Units" : "Orders"}</th>
+                      <th style={smallTh}>Revenue</th>
+                      <th style={smallTh}>Gross Profit</th>
+                      <th style={smallTh}>Margin</th>
+                      <th style={{ ...smallTh, width: "28%" }} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(showAllMargin ? marginRows : marginRows.slice(0, 12)).map((r) => (
+                      <tr key={r.key}>
+                        <td style={{ ...smallTd, textAlign: "left", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }} title={r.name || r.label}>
+                          <span style={{ fontWeight: 600, color: marginBy === "product" ? "#6D28D9" : "#0F172A", fontFamily: marginBy === "product" ? "monospace" : undefined }}>
+                            {r.label}
+                          </span>
+                          {marginBy === "product" && r.name && (
+                            <span style={{ fontSize: 11, color: "#64748B", marginLeft: 6 }}>{r.name}</span>
+                          )}
+                          {r.incomplete > 0 && (
+                            <span style={{ fontSize: 10, color: "#B91C1C", marginLeft: 6 }} title="Some products have no cost on file -- margin overstated">
+                              missing cost
+                            </span>
+                          )}
+                        </td>
+                        <td style={smallTd}>{fmtNum(marginBy === "product" ? r.units : r.orders)}</td>
+                        <td style={smallTd}>{fmt(r.revenue)}</td>
+                        <td style={{ ...smallTd, fontWeight: 700, color: "#0F172A" }}>{fmt(r.profit)}</td>
+                        <td style={{ ...smallTd, fontWeight: 800, color: marginColor(r.pct) }}>
+                          {r.pct == null ? "--" : `${(r.pct * 100).toFixed(1)}%`}
+                        </td>
+                        <td style={smallTd}>
+                          <div style={{ position: "relative", height: 8, background: "#F1F5F9", borderRadius: 4 }}>
+                            <div style={{ width: `${Math.max(0, Math.min(1, r.pct || 0)) * 100}%`, height: 8, background: marginColor(r.pct), borderRadius: 4, opacity: 0.8 }} />
+                            <div title={`Target ${(MARGIN_TARGET * 100).toFixed(0)}%`} style={{ position: "absolute", left: `${MARGIN_TARGET * 100}%`, top: -3, width: 2, height: 14, background: "#0F172A", opacity: 0.4 }} />
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 8 }}>
+                Live orders shipped in the period. Gross profit = price charged - landed cost - FET
+                {marginBy === "product" ? "" : " - freight ACC paid"}; before commissions, co-op and other
+                selling costs. Bar marker = {(MARGIN_TARGET * 100).toFixed(0)}% target.
+                {mCur.estimated > 0 && ` ${mCur.estimated} order(s) shipped before costs were locked use current product costs.`}
+              </div>
+            </>
           )}
         </CC>
       </div>

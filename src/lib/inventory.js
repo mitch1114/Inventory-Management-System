@@ -1,6 +1,7 @@
 import { LOCKING, STAGE_LABEL } from "./constants";
 import { uid, nowIso, todayIso, nextSoNumber, fmtNum } from "./utils";
 import { lockedByProduct, preOrderCoverage, isHeldPreorder } from "./preorderRelease.js";
+import { snapshotLineCosts } from "./orderMargin";
 
 export { preOrderCoverage };
 
@@ -89,6 +90,10 @@ export function advanceStage(data, orderId, newStage, shipInfo, adjustedLines) {
       };
     });
   }
+
+  // Lock in each line's landed cost + FET at shipment so later cost updates
+  // never rewrite this order's margin
+  if (newStage === "shipped") updatedOrderLines = snapshotLineCosts(updatedOrderLines, data.products);
 
   let products = data.products;
   if (newStage === "shipped") {
