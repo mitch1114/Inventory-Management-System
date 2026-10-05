@@ -3,6 +3,7 @@ import { LOCKING } from "../lib/constants";
 import { computeInventory, preOrderTip } from "../lib/inventory";
 import { uid, fmt, fmtNum, fmtDate, nowIso, toCSV, dlCSV, parseCSV } from "../lib/utils";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD } from "./ui";
+import CostImportModal from "./CostImportModal";
 
 // =============================================================================
 // AdjPreview -- shows the live preview of a stock adjustment before applying
@@ -504,6 +505,7 @@ export default function Products({ data, setData }) {
   const [form, setForm] = useState(blankProduct());
   const [drawerProduct, setDrawerProduct] = useState(null);
   const [importModal, setImportModal] = useState(false);
+  const [costImportOpen, setCostImportOpen] = useState(false);
   const [importRows, setImportRows] = useState([]);
   const fileRef = useRef(null);
 
@@ -823,6 +825,9 @@ export default function Products({ data, setData }) {
             style={{ display: "none" }}
             onChange={handleImportFile}
           />
+          <button style={BS} onClick={() => setCostImportOpen(true)} title="Update Cost & Landed from the pricing & margins workbook">
+            Import Costs (Excel)
+          </button>
           <button style={BP} onClick={openNew}>
             + New Product
           </button>
@@ -1118,6 +1123,10 @@ export default function Products({ data, setData }) {
             </button>
           </div>
         </Modal>
+      )}
+
+      {costImportOpen && (
+        <CostImportModal data={data} setData={setData} onClose={() => setCostImportOpen(false)} />
       )}
 
       {/* Import CSV Modal */}
