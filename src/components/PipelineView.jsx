@@ -11,6 +11,7 @@ import { isQboConnected, createInvoiceForOrder } from "../lib/qbo";
 import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import OrderEditModal from "./OrderEditModal";
+import OrderMarginPanel from "./OrderMarginPanel";
 import HelpPanel from "./HelpPanel";
 
 const PICK_VERIFY_HELP = [
@@ -1432,6 +1433,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
               })}
             </tbody>
           </table>
+          <OrderMarginPanel order={detailOrder} products={data.products} />
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
             {LOCKING.has(detailOrder.fulfillmentStage) && (
               <button

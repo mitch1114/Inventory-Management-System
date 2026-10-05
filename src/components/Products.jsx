@@ -572,13 +572,28 @@ export default function Products({ data, setData }) {
       reorderPoint: p.reorderPoint || 0,
       reorderQty: p.reorderQty || 0,
       supplier: p.supplier || "",
+      fetRatePct: p.fetRate != null ? String(Math.round(p.fetRate * 1000) / 10) : "",
+      fetCap: p.fetCap ? String(p.fetCap) : "",
+      fetBase: p.fetBase ? String(p.fetBase) : "",
     });
     setEditing(p);
   };
 
+  // FET inputs are edited as text (blank = not set) and stored as numbers
+  const formToProduct = (f) => {
+    const { fetRatePct, fetCap, fetBase, ...rest } = f;
+    const num = (v) => (v === "" || v == null || isNaN(+v) ? null : +v);
+    return {
+      ...rest,
+      fetRate: num(fetRatePct) != null ? num(fetRatePct) / 100 : null,
+      fetCap: num(fetCap),
+      fetBase: num(fetBase),
+    };
+  };
+
   const save = () => {
     if (editing === "new") {
-      const prod = { id: uid(), ...form };
+      const prod = { id: uid(), ...formToProduct(form) };
       setData((d) => ({
         ...d,
         products: [...d.products, prod],
@@ -596,7 +611,7 @@ export default function Products({ data, setData }) {
     } else {
       setData((d) => ({
         ...d,
-        products: d.products.map((p) => (p.id === editing.id ? { ...p, ...form } : p)),
+        products: d.products.map((p) => (p.id === editing.id ? { ...p, ...formToProduct(form) } : p)),
         auditLog: [
           ...(d.auditLog || []),
           {
@@ -610,7 +625,7 @@ export default function Products({ data, setData }) {
       }));
       // If drawer is open for this product, refresh it
       if (drawerProduct && drawerProduct.id === editing.id) {
-        setDrawerProduct({ ...editing, ...form });
+        setDrawerProduct({ ...editing, ...formToProduct(form) });
       }
     }
     setEditing(null);
@@ -1059,6 +1074,39 @@ export default function Products({ data, setData }) {
                 min="0"
                 value={form.landedCost}
                 onChange={(e) => setForm((f) => ({ ...f, landedCost: +e.target.value || 0 }))}
+              />
+            </Field>
+            <Field label="FET rate % (blank = not set)">
+              <input
+                style={IS}
+                type="number"
+                step="0.1"
+                min="0"
+                placeholder="e.g. 10"
+                value={form.fetRatePct ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, fetRatePct: e.target.value }))}
+              />
+            </Field>
+            <Field label="FET base $ (distributor price)">
+              <input
+                style={IS}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="blank = actual price"
+                value={form.fetBase ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, fetBase: e.target.value }))}
+              />
+            </Field>
+            <Field label="FET cap $ per unit (rods: 10)">
+              <input
+                style={IS}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="blank = no cap"
+                value={form.fetCap ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, fetCap: e.target.value }))}
               />
             </Field>
             <Field label="Sell Price">

@@ -8,6 +8,11 @@ import { Modal, BP, BS } from "./ui";
 const money4 = (n) =>
   `$${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 
+const fetLabel = (f) =>
+  !f
+    ? "--"
+    : `${Math.round(f.fetRate * 1000) / 10}%${f.fetBase ? ` of $${f.fetBase.toFixed(2)}` : ""}${f.fetCap ? ` (cap $${f.fetCap})` : ""}`;
+
 const th = {
   padding: "6px 10px",
   fontSize: 10,
@@ -98,7 +103,7 @@ export default function CostImportModal({ data, setData, onClose }) {
       {done != null ? (
         <div style={{ textAlign: "center", padding: "24px 0" }}>
           <div style={{ fontSize: 16, fontWeight: 800, color: "#15803D" }}>
-            Updated cost &amp; landed cost on {fmtNum(done)} products
+            Updated cost, landed cost &amp; FET on {fmtNum(done)} products
           </div>
           <div style={{ fontSize: 12, color: "#64748B", marginTop: 6 }}>
             Logged in the Audit Log. Sell prices were not touched.
@@ -112,7 +117,8 @@ export default function CostImportModal({ data, setData, onClose }) {
           <p style={{ fontSize: 13, color: "#475569", marginTop: 0 }}>
             Reads the <strong>Pricing costs</strong> sheet: <em>Complete goods / unit</em> becomes{" "}
             <strong>Cost</strong> and <em>Active pricing cost / unit</em> (goods + estimated DDP) becomes{" "}
-            <strong>Landed</strong>. SKUs without a cost yet are skipped, sell prices are untouched, and
+            <strong>Landed</strong>. FET rate, rod cap and distributor-price base come from the{" "}
+            <strong>Products</strong> sheet (used for order margins). SKUs without a cost yet are skipped, sell prices are untouched, and
             nothing is saved until you click Update.
           </p>
           <label style={{ ...BS, display: "inline-block", cursor: "pointer" }}>
@@ -151,6 +157,7 @@ export default function CostImportModal({ data, setData, onClose }) {
                         <th style={th}>Product</th>
                         <th style={th}>Cost</th>
                         <th style={th}>Landed</th>
+                        <th style={th}>FET</th>
                         <th style={th}>Workbook status</th>
                       </tr>
                     </thead>
@@ -169,11 +176,16 @@ export default function CostImportModal({ data, setData, onClose }) {
                             {u.name}
                           </td>
                           <td style={{ ...td, whiteSpace: "nowrap" }}>
-                            <Change from={u.oldCost} to={u.newCost} />
+                            {u.costMissing ? (
+                              <span style={{ fontSize: 11, color: "#9A3412" }}>not costed yet -- unchanged</span>
+                            ) : (
+                              <Change from={u.oldCost} to={u.newCost} />
+                            )}
                           </td>
                           <td style={{ ...td, whiteSpace: "nowrap" }}>
-                            <Change from={u.oldLanded} to={u.newLanded} />
+                            {u.costMissing ? "--" : <Change from={u.oldLanded} to={u.newLanded} />}
                           </td>
+                          <td style={{ ...td, fontSize: 11, whiteSpace: "nowrap" }}>{fetLabel(u.newFet)}</td>
                           <td style={{ ...td, fontSize: 11, color: "#64748B" }}>{u.status || "--"}</td>
                         </tr>
                       ))}

@@ -8,6 +8,8 @@ import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo
 import { pushOrder } from "../lib/shipstation";
 import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import { billableFreight, freightThreshold } from "../lib/freight";
+import { orderMargin, marginColor } from "../lib/orderMargin";
+import OrderMarginPanel from "./OrderMarginPanel";
 import { matchCustomer } from "../lib/historyImport";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
@@ -698,6 +700,8 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
           </div>
         )}
 
+        <OrderMarginPanel order={order} products={data.products} />
+
         {/* Linked QBO Invoice */}
         {order.qboInvoice && (
           <div
@@ -1211,11 +1215,21 @@ export default function SalesOrders({ data, setData }) {
             ? o.shipment.shippingCost.toFixed(2)
             : "",
         FreightBilled: billableFreight(o) > 0 ? billableFreight(o).toFixed(2) : "",
+        ...(() => {
+          const m = orderMargin(o, prodMap);
+          const ok = o.fulfillmentStage !== "cancelled" && m.complete;
+          return {
+            COGS: ok ? m.cogs.toFixed(2) : "",
+            FET: ok ? m.fet.toFixed(2) : "",
+            GrossProfit: ok ? m.profit.toFixed(2) : "",
+            MarginPct: ok && m.marginPct != null ? (m.marginPct * 100).toFixed(1) : "",
+          };
+        })(),
         Notes: o.notes || "",
       };
     });
     const csv = toCSV(rows, [
-      "OrderNum", "Customer", "Date", "Stage", "Type", "DealerPO", "Lines", "Units", "Value", "ShippingFee", "FreightBilled", "Notes",
+      "OrderNum", "Customer", "Date", "Stage", "Type", "DealerPO", "Lines", "Units", "Value", "ShippingFee", "FreightBilled", "COGS", "FET", "GrossProfit", "MarginPct", "Notes",
     ]);
     dlCSV(csv, "sales-orders.csv");
   };
@@ -1436,7 +1450,22 @@ export default function SalesOrders({ data, setData }) {
                   </span>
                 )}
               </TD>
-              <TD mono>{fmt(value)}</TD>
+              <TD mono>
+                {fmt(value)}
+                {(() => {
+                  if (o.fulfillmentStage === "cancelled") return null;
+                  const m = orderMargin(o, prodMap);
+                  if (!m.complete || m.marginPct == null) return null;
+                  return (
+                    <div
+                      title={`${o.fulfillmentStage === "shipped" ? "" : "Expected "}gross margin ${fmt(m.profit)} (after landed cost, FET${m.freightKnown ? ", freight" : ""})`}
+                      style={{ fontSize: 10, fontWeight: 700, color: marginColor(m.marginPct) }}
+                    >
+                      {(m.marginPct * 100).toFixed(1)}% margin
+                    </div>
+                  );
+                })()}
+              </TD>
               <TD>
                 <span
                   style={{
