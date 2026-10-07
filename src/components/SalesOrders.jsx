@@ -10,6 +10,7 @@ import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../l
 import { billableFreight, freightThreshold } from "../lib/freight";
 import { orderMargin, marginColor } from "../lib/orderMargin";
 import OrderMarginPanel from "./OrderMarginPanel";
+import ShipmentEditModal from "./ShipmentEditModal";
 import { matchCustomer } from "../lib/historyImport";
 import { Badge, Modal, Field, Table, TR, TD, IS, SS, BP, BS, BD, BAq, BG } from "./ui";
 import DealerPOImport from "./DealerPOImport";
@@ -174,6 +175,7 @@ function printQboInvoices(orders, prodMap, customers) {
 // --- OrderDrawer (detail panel) ------------------------------------------------
 function OrderDrawer({ order, data, setData, onClose, onEdit }) {
   const [shipModal, setShipModal] = useState(false);
+  const [editShipment, setEditShipment] = useState(false);
   const [boPolicy, setBoPolicy] = useState("kill"); // what to do with backorders at ship time
   const [autoStatus, setAutoStatus] = useState(""); // ShipStation / QBO automation status message
   const [shipForm, setShipForm] = useState({
@@ -668,8 +670,8 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
           </div>
         </div>
 
-        {/* Shipment info */}
-        {order.shipment && order.shipment.carrier && (
+        {/* Shipment info (editable once shipped -- e.g. a rebooked BOL) */}
+        {((order.shipment && order.shipment.carrier) || isShipped) && (
           <div
             style={{
               background: "#F0FDF4",
@@ -679,12 +681,22 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
               marginBottom: 18,
               fontSize: 13,
               color: "#15803D",
+              position: "relative",
+              paddingRight: isShipped ? 120 : 14,
             }}
           >
-            <strong>Shipment:</strong> {order.shipment.carrier}
-            {order.shipment.trackingNum ? ` -- ${order.shipment.trackingNum}` : ""}
-            {order.shipment.shipDate ? ` -- ${fmtDate(order.shipment.shipDate)}` : ""}
-            {order.shipment.shippingCost != null && (
+            {isShipped && (
+              <button
+                onClick={() => setEditShipment(true)}
+                style={{ position: "absolute", top: 8, right: 10, ...BS, padding: "4px 10px", fontSize: 11 }}
+              >
+                Edit shipment
+              </button>
+            )}
+            <strong>Shipment:</strong> {(order.shipment && order.shipment.carrier) || "no carrier entered"}
+            {order.shipment && order.shipment.trackingNum ? ` -- ${order.shipment.trackingNum}` : ""}
+            {order.shipment && order.shipment.shipDate ? ` -- ${fmtDate(order.shipment.shipDate)}` : ""}
+            {order.shipment && order.shipment.shippingCost != null && (
               <span style={{ fontWeight: 700 }}>
                 {" "}-- Shipping cost: {fmt(order.shipment.shippingCost)}
                 {order.shipment.shippingCost > 0 && (
@@ -698,6 +710,10 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
               </span>
             )}
           </div>
+        )}
+
+        {editShipment && (
+          <ShipmentEditModal order={order} setData={setData} onClose={() => setEditShipment(false)} />
         )}
 
         <OrderMarginPanel order={order} products={data.products} />

@@ -12,6 +12,7 @@ import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONS
 import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import OrderEditModal from "./OrderEditModal";
 import OrderMarginPanel from "./OrderMarginPanel";
+import ShipmentEditModal from "./ShipmentEditModal";
 import HelpPanel from "./HelpPanel";
 
 const PICK_VERIFY_HELP = [
@@ -50,6 +51,7 @@ const SHIPPED_DISPLAY_LIMIT = 15;
 
 export default function PipelineView({ data, setData }) {
   const [advModal, setAdvModal] = useState(null);
+  const [shipEditId, setShipEditId] = useState(null); // order id whose shipment is being edited
   const [detailOrder, setDetailOrder] = useState(null); // order detail / print pick sheet popup
   const [editOrder, setEditOrder] = useState(null); // order being edited (add lines / change qtys)
   const [showInventory, setShowInventory] = useState(false); // live-inventory table collapsed by default
@@ -1118,13 +1120,22 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                           units locked
                         </div>
                       )}
-                      {o.shipment && o.shipment.carrier && (
+                      {((o.shipment && o.shipment.carrier) || stage === "shipped") && (
                         <div style={{ fontSize: 11, color: "#64748B", marginBottom: 5 }}>
-                          {o.shipment.carrier} {o.shipment.trackingNum}
-                          {o.shipment.shippingCost != null && (
+                          {(o.shipment && o.shipment.carrier) || "No carrier"} {o.shipment && o.shipment.trackingNum}
+                          {o.shipment && o.shipment.shippingCost != null && (
                             <span style={{ color: "#15803D", fontWeight: 700 }}>
                               {" "}&middot; ship {fmt(o.shipment.shippingCost)}
                             </span>
+                          )}
+                          {stage === "shipped" && (
+                            <button
+                              onClick={() => setShipEditId(o.id)}
+                              title="Edit carrier, tracking/BOL, ship date or shipping cost"
+                              style={{ marginLeft: 6, background: "none", border: "none", padding: 0, color: "#6D28D9", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
+                            >
+                              Edit
+                            </button>
                           )}
                         </div>
                       )}
@@ -1388,6 +1399,14 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       </div>
 
       {/* Order detail / print popup -- view everything without advancing the stage */}
+      {shipEditId && data.salesOrders.some((o) => o.id === shipEditId) && (
+        <ShipmentEditModal
+          order={data.salesOrders.find((o) => o.id === shipEditId)}
+          setData={setData}
+          onClose={() => setShipEditId(null)}
+        />
+      )}
+
       {detailOrder && (
         <Modal
           title={`${detailOrder.orderNum} — ${detailOrder.customer}`}
