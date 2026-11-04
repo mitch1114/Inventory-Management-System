@@ -58,26 +58,43 @@ export function parseSpsOrder(pages) {
   // --- Header fields -----------------------------------------------------------
   const poNumber = (fullText.match(/Order\s*#\s*:\s*([A-Za-z0-9][A-Za-z0-9-]*)/) || [])[1] || "";
 
-  // Dates are label-anchored: the value sits on the label row or within the
-  // next couple of visual rows.
-  const dateNearLabel = (rows, labelRe, lookahead = 2) => {
-    const idx = rows.findIndex((r) => labelRe.test(r.text));
-    if (idx === -1) return [];
-    const found = [];
-    for (let i = idx; i <= Math.min(idx + lookahead, rows.length - 1); i++) {
-      const matches = rows[i].text.matchAll(new RegExp(DATE_RE.source, "g"));
-      for (const m of matches) found.push(toIso(m));
-      if (found.length) break;
+  // Dates are label-anchored AND column-aware: SPS prints each value under
+  // its own label ("Requested Ship Date:" over one column, "Cancel Date:" over
+  // the next). A blank field must stay blank -- never borrow the date from a
+  // neighbouring column (a blank ship date once picked up the cancel date).
+  // Returns "" when the label exists with no date, null when there's no label.
+  const dateForLabel = (rows, labelRe, lookahead = 3) => {
+    for (let i = 0; i < rows.length; i++) {
+      const label = rows[i].items.find((it) => labelRe.test(it.str));
+      if (!label) continue;
+      const own = label.str.match(DATE_RE); // "PO Date: 09/25/2026" in one item
+      if (own) return toIso(own);
+      // Same row, to the right, up to the next label
+      const right = rows[i].items.filter((it) => it.x > label.x).sort((a, b) => a.x - b.x);
+      for (const it of right) {
+        if (/:\s*$/.test(it.str.trim())) break;
+        const m = it.str.match(DATE_RE);
+        if (m) return toIso(m);
+      }
+      // Rows below, same column, stopping at the next label in that column
+      for (let j = i + 1; j <= Math.min(i + lookahead, rows.length - 1); j++) {
+        const col = rows[j].items.filter((it) => Math.abs(it.x - label.x) <= 40);
+        for (const it of col) {
+          const m = it.str.match(DATE_RE);
+          if (m) return toIso(m);
+        }
+        if (col.some((it) => /:\s*$/.test(it.str.trim()))) break;
+      }
+      return "";
     }
-    return found;
+    return null;
   };
 
   const firstPage = pageRows[0] || [];
-  const poDates = dateNearLabel(firstPage, /PO Date:/);
-  const shipDates = dateNearLabel(firstPage, /Requested Ship Date:/, 3);
-  const orderDate = poDates[0] || "";
-  const requestedShipDate = shipDates[0] || "";
-  const cancelDate = shipDates[1] || "";
+  const orderDate = dateForLabel(firstPage, /^\s*PO Date\s*:/) || "";
+  const requestedShipDate = dateForLabel(firstPage, /Requested Ship Date\s*:/) || "";
+  const requestedDeliveryDate = dateForLabel(firstPage, /Requested Delivery Date\s*:/) || "";
+  const cancelDate = dateForLabel(firstPage, /Cancel Date\s*:/) || "";
 
   const poType = (fullText.match(/PO Type\s*:\s*([^\n]+?)(?:\s+Original)?\s*$/m) || [])[1] || "";
   // Reject captures that ran into neighboring labels (empty buyer field)
@@ -202,6 +219,7 @@ export function parseSpsOrder(pages) {
     poNumber,
     orderDate,
     requestedShipDate,
+    requestedDeliveryDate,
     cancelDate,
     poType: poType.trim(),
     customer,

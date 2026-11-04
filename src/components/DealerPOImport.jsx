@@ -392,17 +392,22 @@ export default function DealerPOImport({ data, setData, onClose }) {
             shipToAddr: meta.shipToAddr,
           });
           setChannel("dealer");
-          setRequestedShipDate(meta.requestedShipDate || "");
+          // No ship date on the PO (e.g. Sportsman's) -> ship by the requested
+          // delivery date; the auto-release still puts it in the pick queue 10
+          // days ahead of that.
+          const shipBy = meta.requestedShipDate || meta.requestedDeliveryDate || "";
+          setRequestedShipDate(shipBy);
           // A ship window months out (Scheels program / new-store orders) is a
           // pre-order: hold the units instead of allocating stock that would
           // sit locked until the window. Still switchable in the review step.
-          const daysOut = meta.requestedShipDate
-            ? (new Date(meta.requestedShipDate + "T12:00:00").getTime() - Date.now()) / 86400000
+          const daysOut = shipBy
+            ? (new Date(shipBy + "T12:00:00").getTime() - Date.now()) / 86400000
             : 0;
           setOrderKind(daysOut > 45 ? "preorder" : "regular");
           setSpecialInstructions(
             [
               meta.poType ? `SPS PO Type: ${meta.poType}` : "",
+              meta.requestedDeliveryDate ? `Requested delivery: ${fmtDate(meta.requestedDeliveryDate)}` : "",
               meta.cancelDate ? `Cancel date: ${fmtDate(meta.cancelDate)}` : "",
             ]
               .filter(Boolean)
