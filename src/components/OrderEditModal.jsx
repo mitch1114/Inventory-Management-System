@@ -1,7 +1,8 @@
 import { useState, useMemo } from "react";
 import { LOCKING } from "../lib/constants";
 import { computeInventory } from "../lib/inventory";
-import { uid, fmt, fmtNum, nowIso } from "../lib/utils";
+import { uid, fmt, fmtNum, nowIso, fmtDate } from "../lib/utils";
+import { releaseDateOf, PREORDER_RELEASE_DAYS } from "../lib/preorderRelease.js";
 import { Modal, Field, IS, SS, BP, BS, BD } from "./ui";
 
 // Shared edit modal for an EXISTING sales order (used by the Sales Orders
@@ -18,6 +19,7 @@ export default function OrderEditModal({ order, data, setData, onClose }) {
     date: order.date,
     type: order.type || "standard",
     dealerPORef: order.dealerPORef || "",
+    requestedShipDate: order.requestedShipDate || "",
     notes: order.notes || "",
     lines: order.lines.map((l) => ({
       ...l,
@@ -121,6 +123,7 @@ export default function OrderEditModal({ order, data, setData, onClose }) {
               date: form.date,
               type: form.type,
               dealerPORef: form.dealerPORef,
+              requestedShipDate: form.requestedShipDate,
               notes: form.notes,
               lines,
             }
@@ -133,7 +136,11 @@ export default function OrderEditModal({ order, data, setData, onClose }) {
           ts: nowIso(),
           type: "adjustment",
           entity: order.orderNum,
-          description: `Edited ${order.orderNum} (${form.customer}) -- ${lines.length} line${lines.length !== 1 ? "s" : ""}, ${totalUnits} units (${totalFilled} filled${totalBO > 0 ? `, ${totalBO} backordered` : ""})`,
+          description: `Edited ${order.orderNum} (${form.customer}) -- ${lines.length} line${lines.length !== 1 ? "s" : ""}, ${totalUnits} units (${totalFilled} filled${totalBO > 0 ? `, ${totalBO} backordered` : ""})${
+            (order.requestedShipDate || "") !== form.requestedShipDate
+              ? `; requested ship date ${order.requestedShipDate || "(none)"} -> ${form.requestedShipDate || "(none)"}`
+              : ""
+          }`,
         },
       ],
     }));
@@ -220,6 +227,21 @@ export default function OrderEditModal({ order, data, setData, onClose }) {
             onChange={(e) => setForm((f) => ({ ...f, dealerPORef: e.target.value }))}
             placeholder="Optional"
           />
+        </Field>
+        <Field label="Requested Ship Date">
+          <input
+            style={IS}
+            type="date"
+            value={form.requestedShipDate}
+            onChange={(e) => setForm((f) => ({ ...f, requestedShipDate: e.target.value }))}
+          />
+          {form.type === "preorder" && order.fulfillmentStage === "confirmed" && !order.preorderReleasedAt && (
+            <div style={{ fontSize: 11, color: form.requestedShipDate ? "#7C3AED" : "#C2410C", marginTop: 4 }}>
+              {form.requestedShipDate
+                ? `Pre-order moves to the pick queue on ${fmtDate(releaseDateOf({ requestedShipDate: form.requestedShipDate }))} (${PREORDER_RELEASE_DAYS} days before).`
+                : "No ship date -- this pre-order won't auto-release to the pick queue."}
+            </div>
+          )}
         </Field>
       </div>
 
