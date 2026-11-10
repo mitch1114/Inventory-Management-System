@@ -3,9 +3,10 @@
 //   1. Snapshot backup of the shared app state
 //   2. ShipStation inventory pull (server-side "Pull from ShipStation"):
 //      updates matching products' onHand, appends an audit entry
-//   3. Fills current orders' backorders from shelf stock, then releases
-//      pre-orders whose ship date is within PREORDER_RELEASE_DAYS into the pick
-//      queue and emails the "Confirmed" notification rules
+//   3. Fills current orders' backorders from shelf stock, releases pre-orders
+//      whose ship date is within PREORDER_RELEASE_DAYS into the pick queue,
+//      moves backorders that are now fully in stock into Confirmed, and emails
+//      the "Confirmed" notification rules for both
 //
 // Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 // Optional env: SHIPSTATION_V2_API_KEY (step 2 is skipped without it),
@@ -146,14 +147,16 @@ export default async function handler(req, res) {
     }
 
     // --- Order automation (Central time): fill current orders' backorders from
-    // shelf stock, then release pre-orders within PREORDER_RELEASE_DAYS of shipping ---
+    // shelf stock, release pre-orders within PREORDER_RELEASE_DAYS of shipping,
+    // move backorders that are now fully in stock into Confirmed ---
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
     const rel = runOrderAutomation(data, { today, now: new Date().toISOString(), makeId: uid });
+    const automationChanged = rel.data !== data;
     data = rel.data;
 
     // Skip the write when nothing changed -- a needless updated_at bump makes
     // open browser tabs treat their next save as stale
-    if (!pull && rel.filled.length === 0 && rel.released.length === 0) {
+    if (!pull && !automationChanged) {
       return res.status(200).json({ ok: true, pull, filled: [], released: [], emails: [], backedUp });
     }
 
@@ -188,6 +191,21 @@ export default async function handler(req, res) {
         });
         emails.push({ orderNum: o.orderNum, ...result });
       }
+      for (const o of rel.readyBackorders) {
+        const units = (o.lines || []).reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty), 0);
+        const value = (o.lines || []).reduce((s, l) => s + (l.qtyFilled != null ? l.qtyFilled : l.qty) * (l.price || 0), 0);
+        const result = await sendStageEmail({
+          to: rules.map((r) => r.email),
+          orderNum: o.orderNum,
+          poRef: o.dealerPORef || "",
+          customer: o.customer || "",
+          stageLabel: "Confirmed (backorder ready)",
+          units,
+          value,
+          note: `Backorder carried over from ${o.backorderOf} is now fully in stock and ready to pick.`,
+        });
+        emails.push({ orderNum: o.orderNum, ...result });
+      }
     }
 
     return res.status(200).json({
@@ -195,6 +213,7 @@ export default async function handler(req, res) {
       pull,
       filled: rel.filled,
       released: rel.released.map((o) => o.orderNum),
+      readyBackorders: rel.readyBackorders.map((o) => o.orderNum),
       emails,
       backedUp,
     });
