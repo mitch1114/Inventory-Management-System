@@ -1,6 +1,6 @@
 import { LOCKING, STAGE_LABEL } from "./constants";
 import { uid, nowIso, todayIso, nextSoNumber, fmtNum } from "./utils";
-import { lockedByProduct, preOrderCoverage, isHeldPreorder } from "./preorderRelease.js";
+import { lockedByProduct, preOrderCoverage, isHeldPreorder, priorityDate } from "./preorderRelease.js";
 import { snapshotLineCosts } from "./orderMargin";
 
 export { preOrderCoverage };
@@ -201,6 +201,7 @@ export function resolveBackorders(data, orderId, policy) {
       qtyBackordered: boOf(l) - filled,
     };
   });
+  const complete = childLines.every((l) => l.qtyBackordered === 0);
   const child = {
     id: uid(),
     orderNum,
@@ -208,8 +209,17 @@ export function resolveBackorders(data, orderId, policy) {
     date: todayIso(),
     fulfillmentStage: "confirmed",
     type: order.type || "standard",
+    // A pre-order's carried-over remainder is already past its release
+    ...(order.type === "preorder" ? { preorderReleasedAt: nowIso() } : {}),
     dealerPORef: order.dealerPORef || "",
+    ...(order.channel ? { channel: order.channel } : {}),
+    ...(order.shipToAddr ? { shipToAddr: order.shipToAddr } : {}),
+    ...(order.showOrder ? { showOrder: order.showOrder } : {}),
     backorderOf: order.orderNum,
+    backorderOfDate: order.date || todayIso(),
+    // Held out of the pick queue until every unit is in stock (see
+    // markReadyBackorders); complete from the start -> straight to Confirmed
+    ...(complete ? { backorderReadyAt: nowIso() } : { backorderWaiting: true }),
     lines: childLines,
     shipment: {},
     notes: `Backorder carried over from ${order.orderNum}`,
@@ -259,7 +269,7 @@ export function autoAllocate(data, receivedLines) {
             (l) => l.productId === productId && (l.qtyBackordered != null ? l.qtyBackordered : 0) > 0,
           ),
       )
-      .sort((a, b) => a.o.date.localeCompare(b.o.date));
+      .sort((a, b) => priorityDate(a.o).localeCompare(priorityDate(b.o)));
     for (const { o, i } of targets) {
       if (pool <= 0) break;
       orders[i].lines = orders[i].lines.map((l) => {

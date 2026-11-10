@@ -1,4 +1,4 @@
-// --- Pre-order holding & automatic release ----------------------------------------
+// --- Pre-order / backorder holding & automatic release -----------------------------
 // Confirmed pre-orders are HELD out of the pick queue until shortly before their
 // requested ship date. PREORDER_RELEASE_DAYS before that date they're released:
 // on-hand stock reserved for them becomes real fills (locked), and they join
@@ -15,7 +15,15 @@ const lineBO = (l) => (l.qtyBackordered != null ? l.qtyBackordered : 0);
 
 // A pre-order still waiting for its release window
 export const isHeldPreorder = (o) =>
-  o.fulfillmentStage === "confirmed" && o.type === "preorder" && !o.preorderReleasedAt;
+  o.fulfillmentStage === "confirmed" && o.type === "preorder" && !o.preorderReleasedAt && !o.backorderOf;
+
+// A backorder (remainder split off a shipped order) waiting until ALL of its
+// units are in stock; it joins the Confirmed pick queue once complete.
+export const isHeldBackorder = (o) =>
+  o.fulfillmentStage === "confirmed" && !!o.backorderOf && !o.backorderReadyAt;
+
+// Allocation priority date: a backorder keeps its original order's date
+export const priorityDate = (o) => o.backorderOfDate || o.date || "";
 
 // ISO date the pre-order releases to the pick queue ("" when it has no ship date)
 export function releaseDateOf(o) {
@@ -151,7 +159,8 @@ export function releaseDuePreorders(data, { today, now, makeId }) {
  * reservations (a pre-order shipping in months shouldn't block an order that
  * needs to ship this week -- the pre-order shows as awaiting stock instead).
  * Only Confirmed, non-held orders are touched; picked orders keep whatever
- * quantities were actually picked. Oldest order first.
+ * quantities were actually picked. Oldest order first (backorders by their
+ * original order's date).
  * Pure -- returns { data, filled: [{ orderNum, units }] }.
  */
 export function fillBackordersFromStock(data, { now, makeId }) {
@@ -169,7 +178,7 @@ export function fillBackordersFromStock(data, { now, makeId }) {
     )
     .sort(
       (a, b) =>
-        (a.date || "").localeCompare(b.date || "") ||
+        priorityDate(a).localeCompare(priorityDate(b)) ||
         (a.orderNum || "").localeCompare(b.orderNum || ""),
     );
   if (targets.length === 0) return { data, filled: [] };
@@ -210,13 +219,60 @@ export function fillBackordersFromStock(data, { now, makeId }) {
 }
 
 /**
+ * Move held backorders whose every unit is now in stock into the Confirmed
+ * pick queue (stamp backorderReadyAt). Backorders still short are marked
+ * backorderWaiting, so only ones that actually waited are reported as
+ * `ready` (for the "Confirmed" email) -- a backorder that was complete from
+ * the start just joins the queue quietly.
+ * Pure -- returns { data, ready } (data is unchanged when nothing changed).
+ */
+export function markReadyBackorders(data, { now, makeId }) {
+  const ready = [];
+  let changed = false;
+  const salesOrders = (data.salesOrders || []).map((o) => {
+    if (!isHeldBackorder(o)) return o;
+    const short = (o.lines || []).reduce((s, l) => s + lineBO(l), 0);
+    if (short > 0) {
+      if (o.backorderWaiting) return o;
+      changed = true;
+      return { ...o, backorderWaiting: true };
+    }
+    changed = true;
+    const next = { ...o, backorderReadyAt: now };
+    if (o.backorderWaiting) ready.push(next);
+    return next;
+  });
+  if (!changed) return { data, ready: [] };
+  return {
+    data: {
+      ...data,
+      salesOrders,
+      auditLog: [
+        ...(data.auditLog || []),
+        ...ready.map((o) => ({
+          id: makeId(),
+          ts: now,
+          type: "backorder-ready",
+          entity: o.orderNum,
+          description: `Backorder ${o.orderNum} (${o.customer}, from ${o.backorderOf}) is fully in stock -- moved to Confirmed for picking`,
+        })),
+      ],
+    },
+    ready,
+  };
+}
+
+/**
  * The automatic order pass run by the app and the cron: fill current orders
- * from shelf stock first, then release pre-orders that are due (they take
- * the reserved stock that's left).
- * Returns { data, filled, released }.
+ * (and backorders) from shelf stock first, release pre-orders that are due
+ * (they take the reserved stock that's left), then move complete backorders
+ * into the pick queue.
+ * Returns { data, filled, released, readyBackorders }; `data` is the same
+ * object that was passed in when nothing changed.
  */
 export function runOrderAutomation(data, opts) {
   const f = fillBackordersFromStock(data, opts);
   const r = releaseDuePreorders(f.data, opts);
-  return { data: r.data, filled: f.filled, released: r.released };
+  const b = markReadyBackorders(r.data, opts);
+  return { data: b.data, filled: f.filled, released: r.released, readyBackorders: b.ready };
 }

@@ -160,8 +160,9 @@ export default function App() {
   }, []);
 
   // Automatic order pass (the 6am/10pm cron runs the same pass server-side):
-  // fill current orders' backorders from shelf stock, then release pre-orders
-  // within PREORDER_RELEASE_DAYS of their ship date into the pick queue. Runs
+  // fill current orders' backorders from shelf stock, release pre-orders
+  // within PREORDER_RELEASE_DAYS of their ship date into the pick queue, and
+  // move backorders that are now fully in stock into Confirmed. Runs
   // on fresh data only -- after load, refetch or a realtime update -- and an
   // hourly refetch keeps a tab left open overnight releasing on time.
   const [autoTick, setAutoTick] = useState(0);
@@ -183,8 +184,21 @@ export default function App() {
     const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const opts = { today, now: nowIso(), makeId: uid };
     const preview = runOrderAutomation(dataRaw, opts);
-    if (preview.filled.length === 0 && preview.released.length === 0) return;
+    if (preview.data === dataRaw) return;
     setData((prev) => runOrderAutomation(prev, opts).data);
+    preview.readyBackorders.forEach((o) => {
+      if (releaseNotified.current.has(o.id)) return;
+      releaseNotified.current.add(o.id);
+      sendStageNotifications(
+        o,
+        "confirmed",
+        dataRaw.notificationRules,
+        `Backorder carried over from ${o.backorderOf} is now fully in stock and ready to pick.`,
+      ).then((r) => {
+        const entry = notifyAuditEntry(o.orderNum, "confirmed", r);
+        if (entry) setData((cur) => ({ ...cur, auditLog: [...(cur.auditLog || []), entry] }));
+      });
+    });
     preview.released.forEach((o) => {
       if (releaseNotified.current.has(o.id)) return;
       releaseNotified.current.add(o.id);

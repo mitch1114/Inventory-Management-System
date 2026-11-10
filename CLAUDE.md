@@ -79,6 +79,11 @@ Confirmed orders' backorders from shelf stock. 10 days before
 fills, `preorderReleasedAt`, "Confirmed" emails). The pass runs in the cron
 (6am/10pm CT) and in App.jsx on fresh data.
 
+Backorders (split off at shipment, `backorderOf`) are held out of Confirmed
+in a board strip until every unit is filled (shelf-stock fill pass or
+receiving, prioritized by `backorderOfDate`), then get `backorderReadyAt`,
+join Confirmed and send the "Confirmed" email (same automation pass).
+
 ### Env vars (Vercel)
 VITE_SUPABASE_URL/_ANON_KEY (browser), SUPABASE_URL +
 SUPABASE_SERVICE_ROLE_KEY + CRON_SECRET (cron), SHIPSTATION_API_KEY/

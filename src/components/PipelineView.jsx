@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { STAGES, STAGE_LABEL, STAGE_NEXT, STAGE_BTN, LOCKING, CHANNELS } from "../lib/constants";
 import { computeInventory, advanceStage, resolveBackorders, preOrderCoverage, preOrderTip } from "../lib/inventory";
-import { isHeldPreorder, releaseDateOf, PREORDER_RELEASE_DAYS } from "../lib/preorderRelease.js";
+import { isHeldPreorder, isHeldBackorder, releaseDateOf, PREORDER_RELEASE_DAYS } from "../lib/preorderRelease.js";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
@@ -82,6 +82,9 @@ export default function PipelineView({ data, setData }) {
   // then released automatically into the Confirmed column.
   const isPreHold = isHeldPreorder;
   const preHoldOrders = useMemo(() => data.salesOrders.filter(isPreHold), [data.salesOrders]);
+  // Backorders wait outside the pick queue until every unit is in stock
+  const boHoldOrders = useMemo(() => data.salesOrders.filter(isHeldBackorder), [data.salesOrders]);
+  const [boOpen, setBoOpen] = useState(true);
   // On-hand stock reserved for each pre-order line (earliest ship window first)
   const preCoverage = useMemo(
     () => preOrderCoverage(data.products, data.salesOrders).byLine,
@@ -121,7 +124,7 @@ export default function PipelineView({ data, setData }) {
       m[s] = [];
     });
     data.salesOrders.forEach((o) => {
-      if (isPreHold(o)) return;
+      if (isPreHold(o) || isHeldBackorder(o)) return;
       if (m[o.fulfillmentStage]) m[o.fulfillmentStage].push(o);
     });
     return m;
@@ -975,6 +978,101 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
         );
       })()}
 
+      {/* Backorders waiting on stock -- move to Confirmed automatically once complete */}
+      {boHoldOrders.length > 0 && (
+        <div
+          style={{
+            background: "#FFF7ED",
+            border: "1px solid #FED7AA",
+            borderRadius: 12,
+            padding: "10px 14px",
+            marginBottom: 16,
+          }}
+        >
+          <button
+            onClick={() => setBoOpen((v) => !v)}
+            aria-expanded={boOpen}
+            style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", textAlign: "left", flexWrap: "wrap" }}
+          >
+            <span style={{ color: "#C2410C", fontSize: 12, width: 10 }}>{boOpen ? "▾" : "▸"}</span>
+            <span style={{ fontWeight: 800, color: "#9A3412", fontSize: 13 }}>
+              Backorders waiting on stock ({boHoldOrders.length})
+            </span>
+            <span style={{ fontSize: 11, color: "#9A3412" }}>
+              Moves to Confirmed automatically once every unit is in stock.
+            </span>
+            <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#C2410C" }}>
+              {boOpen ? "Hide" : "Show"}
+            </span>
+          </button>
+          {boOpen && (
+            <div style={{ marginTop: 10, background: "#FFFFFF", border: "1px solid #FED7AA", borderRadius: 8, overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 680 }}>
+                <thead>
+                  <tr>
+                    {["Order", "Customer", "Backorder of", "Units", "Value", "Stock", ""].map((h) => (
+                      <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#C2410C", textTransform: "uppercase", letterSpacing: "0.05em", background: "#FFF7ED" }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {boHoldOrders.map((o) => {
+                    const ordered = o.lines.reduce((s, l) => s + l.qty, 0);
+                    const short = o.lines.reduce((s, l) => s + (l.qtyBackordered || 0), 0);
+                    const total = o.lines.reduce((s, l) => s + l.qty * l.price, 0);
+                    const shortSkus = o.lines
+                      .filter((l) => (l.qtyBackordered || 0) > 0)
+                      .map((l) => `${(prodMap[l.productId] || {}).sku || "?"} (${l.qtyBackordered})`)
+                      .join(", ");
+                    const td = { padding: "7px 10px", fontSize: 12, color: "#334155", borderTop: "1px solid #FFEDD5" };
+                    return (
+                      <tr key={o.id}>
+                        <td style={td}>
+                          <span
+                            onClick={() => setDetailOrder(o)}
+                            style={{ fontFamily: "monospace", fontWeight: 800, color: "#6D28D9", cursor: "pointer", textDecoration: "underline", textDecorationColor: "#DDD6FE" }}
+                          >
+                            {o.orderNum}
+                          </span>
+                          {o.dealerPORef && <div style={{ fontSize: 10, fontFamily: "monospace", color: "#94A3B8" }}>{o.dealerPORef}</div>}
+                        </td>
+                        <td style={{ ...td, fontWeight: 600, color: "#0F172A" }}>{o.customer}</td>
+                        <td style={{ ...td, fontFamily: "monospace" }}>{o.backorderOf}</td>
+                        <td style={td}>{fmtNum(ordered)}</td>
+                        <td style={td}>{fmt(total)}</td>
+                        <td style={td} title={shortSkus ? `Waiting on: ${shortSkus}` : undefined}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#9A3412", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap" }}>
+                            {fmtNum(short)} of {fmtNum(ordered)} awaiting stock
+                          </span>
+                          {shortSkus && <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{shortSkus}</div>}
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
+                          <button
+                            onClick={() => setEditOrder(o)}
+                            style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E2E8F0", background: "#F8FAFC", color: "#64748B", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: "inherit", marginRight: 6 }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => openAdvance(o)}
+                            title="Ship what's in stock now (partial fills allowed)"
+                            style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #FED7AA", background: "#FFFFFF", color: "#C2410C", fontWeight: 700, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}
+                          >
+                            Pick Anyway
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Kanban columns */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
         {COLUMNS.map((colDef) => {
@@ -1087,6 +1185,7 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                           <Badge status={stage} label={STAGE_LABEL[stage]} />
                         )}
                         {hasBO && <Badge status="backordered" label="Has BO" />}
+                        {o.backorderOf && <Badge status="backordered" label={`BO of ${o.backorderOf}`} />}
                         {o.type === "preorder" && (
                           <Badge
                             status="preorder"
