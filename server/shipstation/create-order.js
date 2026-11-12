@@ -44,7 +44,7 @@ export default async function handler(req, res) {
             .trim()
             // Only strip US/USA when it follows a ZIP (or stands alone) --
             // company names like "Fish USA" / "Midway USA" must survive.
-            .replace(/(\d{5}(?:-\d{4})?)\s+(?:US|USA|United States)$/i, "$1")
+            .replace(/(\d{5}(?:-\d{4})?)\s*(?:US|USA|United States)$/i, "$1")
             .replace(/^(?:US|USA|United States)$/i, "")
             .replace(/([A-Za-z])(\d{5}(?:-\d{4})?)$/, "$1 $2"),
         )

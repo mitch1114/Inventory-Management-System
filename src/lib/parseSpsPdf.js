@@ -34,7 +34,9 @@ export function itemsToRows(items) {
 // Quick format sniff: is this an SPS Commerce order PDF?
 export function detectSpsFormat(pages) {
   const text = pages.flat().map((i) => i.str).join(" ");
-  return /Order\s*#\s*:/.test(text) && /Unit Price:/.test(text) && /Requested Ship Date:/.test(text);
+  // Labels may carry a space before the colon ("Requested Ship Date :" on
+  // newer Midway PDFs)
+  return /Order\s*#\s*:/.test(text) && /Unit Price\s*:/.test(text) && /Requested Ship Date\s*:/.test(text);
 }
 
 const titleCaseIfShouty = (s) =>
@@ -96,7 +98,7 @@ export function parseSpsOrder(pages) {
   const requestedDeliveryDate = dateForLabel(firstPage, /Requested Delivery Date\s*:/) || "";
   const cancelDate = dateForLabel(firstPage, /Cancel Date\s*:/) || "";
 
-  const poType = (fullText.match(/PO Type\s*:\s*([^\n]+?)(?:\s+Original)?\s*$/m) || [])[1] || "";
+  const poType = (fullText.match(/PO Type\s*:\s*([^\n]+?)(?:\s*Original)?\s*$/m) || [])[1] || "";
   // Reject captures that ran into neighboring labels (empty buyer field)
   let buyerName = (fullText.match(/Buyer Name(?:\/| or )?Dep(?:t|artment)?\s*:?\s*([A-Za-z][^\n]*)/) || [])[1] || "";
   if (buyerName.includes(":")) buyerName = "";
@@ -131,7 +133,12 @@ export function parseSpsOrder(pages) {
           .trim();
         if (!txt) continue;
         if (/^(Location ID|Phone|Fax|E-?mail|Contact)/i.test(txt)) continue;
-        shipToLines.push(txt);
+        // Un-glue "ROCHEPORT, MO65279US" -> "ROCHEPORT, MO 65279 US"
+        shipToLines.push(
+          txt
+            .replace(/\b([A-Z]{2})(\d{5}(?:-\d{4})?)/, "$1 $2")
+            .replace(/(\d{5}(?:-\d{4})?)(US|USA)$/, "$1 $2"),
+        );
       }
       if (shipToLines.length > 0) customer = titleCaseIfShouty(shipToLines[0]);
     }
@@ -144,7 +151,7 @@ export function parseSpsOrder(pages) {
   // "Unit Price:" label (stacked UNIT COST / RETAIL PRICE cell), so the price
   // is optional on the anchor row and gets derived from total / qty instead.
   const ITEM_RE =
-    /^(\d{1,3})\s+(.*?)\b(\d{12,14})\b\s+(.*?)Unit Price:\s*(?:([\d,]+\.\d{2})\s+)?([\d,]+(?:\.\d+)?)\s+Each\s+([\d,]+\.\d{2})/;
+    /^(\d{1,3})\s+(.*?)\b(\d{12,14})\b\s+(.*?)Unit Price\s*:\s*(?:([\d,]+\.\d{2})\s+)?([\d,]+(?:\.\d+)?)\s+Each\s+([\d,]+\.\d{2})/;
   const money = (s) => parseFloat(String(s).replace(/,/g, "")) || 0;
   // SKU-shaped: dashed codes (SPS-51S-MF-C) or dashless letter+digit codes of
   // 6+ chars (DF4CLR300). All-digit tokens (UPCs, buyer item numbers) excluded.
