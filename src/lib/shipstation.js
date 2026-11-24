@@ -71,11 +71,28 @@ export async function pushOrder(order, products, customers) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ order: enrichedOrder }),
     });
-    return await res.json();
+    // A timeout or platform error comes back as HTML, not JSON -- report the
+    // status instead of a cryptic JSON parse error.
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return {
+        success: false,
+        error: `ShipStation push failed (HTTP ${res.status})`,
+        detail: text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200),
+      };
+    }
   } catch (err) {
     return { success: false, error: `Network error: ${err.message}` };
   }
 }
+
+/** Order patch recording a push outcome: clears or sets the visible error. */
+export const pushOutcomePatch = (result, why) =>
+  result && result.success
+    ? { shipstationOrderId: result.shipstationOrderId, ssOrderNumber: result.orderNumber, ssPushError: undefined }
+    : { ssPushError: { at: new Date().toISOString(), message: why } };
 
 /**
  * Check ShipStation for shipment updates on a list of order numbers.

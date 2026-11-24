@@ -6,7 +6,7 @@ import { isHeldPreorder, isHeldBackorder, releaseDateOf, PREORDER_RELEASE_DAYS }
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { fmt, fmtNum, fmtDate, todayIso, uid, nowIso } from "../lib/utils";
 import { Badge, Modal, Field, IS, BP, BS, BD } from "./ui";
-import { pushOrder, syncShipments } from "../lib/shipstation";
+import { pushOrder, syncShipments, pushOutcomePatch } from "../lib/shipstation";
 import { isQboConnected, createInvoiceForOrder } from "../lib/qbo";
 import { buildScanIndex, matchScan, SCANNER_CONFIG, DECODER_OPTIONS, CAMERA_CONSTRAINTS, waitForElement } from "../lib/scan";
 import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
@@ -59,6 +59,7 @@ export default function PipelineView({ data, setData }) {
   const [shipForm, setShipForm] = useState({ carrier: "", trackingNum: "", shipDate: todayIso(), shippingCost: "" });
   const [pickQtys, setPickQtys] = useState([]); // [{productId, qtyFilled}] for pick confirmation
   const [ssPushing, setSsPushing] = useState(false); // ShipStation push in progress
+  const [pushingId, setPushingId] = useState(null); // order being pushed (per-card spinner)
   const [ssSyncing, setSsSyncing] = useState(false); // ShipStation sync in progress
   const [ssStatus, setSsStatus] = useState(""); // status message
   // Pick scanner state
@@ -467,18 +468,17 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
   // audit log; the "Push" button on unpushed picked/booked cards retries this.
   const doPushToShipStation = async (order) => {
     setSsPushing(true);
+    setPushingId(order.id);
     setSsStatus("");
     try {
       const result = await pushOrder(order, data.products, data.customers);
       if (result.success) {
         setSsStatus(`Pushed ${order.orderNum} to ShipStation`);
-        // Store ShipStation order ID on the order
+        // Store ShipStation order ID on the order (and clear any old error)
         setData((d) => ({
           ...d,
           salesOrders: d.salesOrders.map((so) =>
-            so.id === order.id
-              ? { ...so, shipstationOrderId: result.shipstationOrderId, ssOrderNumber: result.orderNumber }
-              : so,
+            so.id === order.id ? { ...so, ...pushOutcomePatch(result) } : so,
           ),
           auditLog: [
             ...(d.auditLog || []),
@@ -494,8 +494,13 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       } else {
         const why = `${result.error || "Unknown error"}${result.detail ? ` -- ${result.detail}` : ""}`;
         setSsStatus(`ShipStation push failed: ${why}`);
+        // Keep the reason ON the order so it shows on its card (for everyone)
+        // until a push succeeds -- the status bar message is easy to miss.
         setData((d) => ({
           ...d,
+          salesOrders: d.salesOrders.map((so) =>
+            so.id === order.id ? { ...so, ...pushOutcomePatch(result, why) } : so,
+          ),
           auditLog: [
             ...(d.auditLog || []),
             {
@@ -510,8 +515,15 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
       }
     } catch (err) {
       setSsStatus(`ShipStation push failed: ${err.message}`);
+      setData((d) => ({
+        ...d,
+        salesOrders: d.salesOrders.map((so) =>
+          so.id === order.id ? { ...so, ...pushOutcomePatch(null, err.message) } : so,
+        ),
+      }));
     }
     setSsPushing(false);
+    setPushingId(null);
     setTimeout(() => setSsStatus(""), 15000);
   };
 
@@ -1279,8 +1291,26 @@ ${o.notes ? `<div class="note"><b>Notes:</b> ${esc(o.notes)}</div>` : ""}
                             opacity: ssPushing ? 0.6 : 1,
                           }}
                         >
-                          {ssPushing ? "Pushing..." : "Not in ShipStation -- Push now"}
+                          {pushingId === o.id ? "Pushing to ShipStation..." : ssPushing ? "Another push in progress..." : "Not in ShipStation -- Push now"}
                         </button>
+                      )}
+                      {(stage === "picked" || stage === "booked") && !o.shipstationOrderId && o.ssPushError && pushingId !== o.id && (
+                        <div
+                          style={{
+                            background: "#FEF2F2",
+                            border: "1px solid #FECACA",
+                            borderRadius: 6,
+                            padding: "5px 8px",
+                            marginBottom: 6,
+                            fontSize: 11,
+                            color: "#991B1B",
+                            lineHeight: 1.4,
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          <strong>Push failed{o.ssPushError.at ? ` (${new Date(o.ssPushError.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })})` : ""}:</strong>{" "}
+                          {o.ssPushError.message}
+                        </div>
                       )}
 
                       {/* Callout on Confirmed cards to verify quantities at pick */}
