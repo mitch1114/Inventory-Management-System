@@ -5,7 +5,7 @@ import { isHeldPreorder } from "../lib/preorderRelease.js";
 import BackorderPolicyPicker from "./BackorderPolicyPicker";
 import { uid, fmt, fmtNum, fmtDate, nowIso, todayIso, toCSV, dlCSV } from "../lib/utils";
 import { isQboConnected, fetchInvoices, createInvoiceForOrder } from "../lib/qbo";
-import { pushOrder } from "../lib/shipstation";
+import { pushOutcomePatch, pushOrder } from "../lib/shipstation";
 import { sendShippedEmail, sendStageNotifications, notifyAuditEntry } from "../lib/notify";
 import { billableFreight, freightThreshold } from "../lib/freight";
 import { orderMargin, marginColor } from "../lib/orderMargin";
@@ -178,6 +178,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
   const [editShipment, setEditShipment] = useState(false);
   const [boPolicy, setBoPolicy] = useState("kill"); // what to do with backorders at ship time
   const [autoStatus, setAutoStatus] = useState(""); // ShipStation / QBO automation status message
+  const [pushing, setPushing] = useState(false);
   const [shipForm, setShipForm] = useState({
     carrier: "",
     trackingNum: "",
@@ -236,6 +237,58 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     setTimeout(() => setAutoStatus(""), 6000);
   };
 
+  // Push to ShipStation and record the outcome on the order (a failure's
+  // reason stays visible in this drawer and on the board card until a push
+  // succeeds). Used by the stage automation and the drawer's Push now button.
+  const pushToShipStation = (orderToPush) => {
+    setPushing(true);
+    pushOrder(orderToPush, data.products, data.customers)
+      .then((result) => {
+        if (result.success) {
+          showAutoStatus(`Pushed ${order.orderNum} to ShipStation`);
+          setData((d) => ({
+            ...d,
+            salesOrders: d.salesOrders.map((so) =>
+              so.id === order.id ? { ...so, ...pushOutcomePatch(result) } : so,
+            ),
+            auditLog: [
+              ...(d.auditLog || []),
+              {
+                id: uid(),
+                ts: nowIso(),
+                type: "shipstation-push",
+                entity: order.orderNum,
+                description: `Pushed ${order.orderNum} to ShipStation (ID: ${result.shipstationOrderId})`,
+              },
+            ],
+          }));
+        } else {
+          // Surface the full reason and audit-log it -- a swallowed push
+          // failure leaves the order missing from ShipStation silently.
+          const why = `${result.error || "Unknown error"}${result.detail ? ` -- ${result.detail}` : ""}`;
+          showAutoStatus(`ShipStation push failed: ${why}`);
+          setData((d) => ({
+            ...d,
+            salesOrders: d.salesOrders.map((so) =>
+              so.id === order.id ? { ...so, ...pushOutcomePatch(result, why) } : so,
+            ),
+            auditLog: [
+              ...(d.auditLog || []),
+              {
+                id: uid(),
+                ts: nowIso(),
+                type: "shipstation-push",
+                entity: order.orderNum,
+                description: `FAILED to push ${order.orderNum} to ShipStation: ${why}`,
+              },
+            ],
+          }));
+        }
+      })
+      .catch((err) => showAutoStatus(`ShipStation push failed: ${err.message}`))
+      .finally(() => setPushing(false));
+  };
+
   // Same stage automation as PipelineView: push to ShipStation when the
   // order reaches "picked" (fallback at "booked" for orders not yet pushed) and
   // auto-create a QBO invoice. Fire-and-forget -- never blocks the advance.
@@ -256,49 +309,7 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
     }
 
     if ((stage === "picked" || stage === "booked") && !order.shipstationOrderId) {
-      pushOrder(advancedOrder, data.products, data.customers)
-        .then((result) => {
-          if (result.success) {
-            showAutoStatus(`Pushed ${order.orderNum} to ShipStation`);
-            setData((d) => ({
-              ...d,
-              salesOrders: d.salesOrders.map((so) =>
-                so.id === order.id
-                  ? { ...so, shipstationOrderId: result.shipstationOrderId, ssOrderNumber: result.orderNumber }
-                  : so,
-              ),
-              auditLog: [
-                ...(d.auditLog || []),
-                {
-                  id: uid(),
-                  ts: nowIso(),
-                  type: "shipstation-push",
-                  entity: order.orderNum,
-                  description: `Pushed ${order.orderNum} to ShipStation (ID: ${result.shipstationOrderId})`,
-                },
-              ],
-            }));
-          } else {
-            // Surface the full reason and audit-log it -- a swallowed push
-            // failure leaves the order missing from ShipStation silently.
-            const why = `${result.error || "Unknown error"}${result.detail ? ` -- ${result.detail}` : ""}`;
-            showAutoStatus(`ShipStation push failed: ${why}`);
-            setData((d) => ({
-              ...d,
-              auditLog: [
-                ...(d.auditLog || []),
-                {
-                  id: uid(),
-                  ts: nowIso(),
-                  type: "shipstation-push",
-                  entity: order.orderNum,
-                  description: `FAILED to push ${order.orderNum} to ShipStation: ${why}`,
-                },
-              ],
-            }));
-          }
-        })
-        .catch((err) => showAutoStatus(`ShipStation push failed: ${err.message}`));
+      pushToShipStation(advancedOrder);
     }
 
     if (stage === "booked" && isQboConnected() && !order.qboInvoice) {
@@ -549,6 +560,37 @@ function OrderDrawer({ order, data, setData, onClose, onEdit }) {
             }}
           >
             {autoStatus}
+          </div>
+        )}
+
+        {/* Not in ShipStation: retry + the last failure reason */}
+        {(order.fulfillmentStage === "picked" || order.fulfillmentStage === "booked") && !order.shipstationOrderId && (
+          <div
+            style={{
+              background: "#FEF2F2",
+              border: "1px solid #FECACA",
+              borderRadius: 10,
+              padding: "10px 14px",
+              marginBottom: 14,
+              fontSize: 12,
+              color: "#991B1B",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <strong>Not in ShipStation</strong>
+              <button
+                style={{ ...BS, padding: "4px 12px", fontSize: 11 }}
+                disabled={pushing}
+                onClick={() => pushToShipStation(order)}
+              >
+                {pushing ? "Pushing..." : "Push now"}
+              </button>
+            </div>
+            {order.ssPushError && !pushing && (
+              <div style={{ marginTop: 6, lineHeight: 1.45, wordBreak: "break-word" }}>
+                Last attempt failed ({new Date(order.ssPushError.at).toLocaleString()}): {order.ssPushError.message}
+              </div>
+            )}
           </div>
         )}
 
